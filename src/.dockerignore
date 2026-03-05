@@ -1,0 +1,10 @@
+.git/
+__pycache__/
+*.pyc
+*.pyo
+tests/
+*.log
+.env*
+.venv/
+old_code/
+specs/

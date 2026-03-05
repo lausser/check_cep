@@ -1,0 +1,1193 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""check_cep - Nagios/Naemon plugin for Playwright E2E tests in Podman containers.
+
+Host-side orchestrator: translates CLI arguments to container env vars and volume
+mounts, runs the container, parses results, and produces Nagios-compatible output.
+"""
+
+from argparse import ArgumentParser
+import io
+import json
+import logging
+import os
+import re
+import shutil
+import stat
+import subprocess
+import sys
+import threading
+import time
+import unicodedata
+import urllib.parse
+from logging.handlers import RotatingFileHandler
+from typing import Any, Dict, List, Optional, Tuple
+
+logger = logging.getLogger("check_cep")
+
+# Exit codes
+EXIT_OK = 0
+EXIT_WARNING = 1
+EXIT_CRITICAL = 2
+EXIT_UNKNOWN = 3
+EXIT_AUTH_REQUIRED = 125  # Podman authentication failure
+
+# File permissions
+PERM_WORLD_RWX = 0o777
+
+# Log rotation
+LOG_MAX_BYTES = 1_000_000
+LOG_BACKUP_COUNT = 3
+
+# Default resource limits
+DEFAULT_MEMORY_LIMIT = "2g"
+DEFAULT_CPU_COUNT = 2  # Hardcoded intentional (FR-006)
+
+# Cgroup v2 resource monitoring
+CGROUP_POLL_INTERVAL_SEC = 0.250  # 4 samples/sec
+CGROUP_BASE_PATH = "/sys/fs/cgroup"
+
+
+# ---------------------------------------------------------------------------
+# Output sanitization utilities
+# ---------------------------------------------------------------------------
+
+def remove_html_entities(line: str) -> str:
+    """Escape HTML special characters for safe Nagios output."""
+    return (
+        line.replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace('"', "&quot;")
+    )
+
+
+def remove_ansi_escapes(line: bytes) -> str:
+    """Remove ANSI escape codes from byte string, decode to ASCII."""
+    ansi_escape = re.compile(r"(?:\x1B[@-_]|[\x80-\x9F])[0-?]*[ -/]*[@-~]")
+    decoded = line.decode("ascii", "ignore")
+    cleaned = ansi_escape.sub("", decoded)
+    cleaned = re.sub(r"(?imu)^\s*\n", "", cleaned)
+    return cleaned.replace("|", "")
+
+
+def remove_invalid_surrogates(text: str) -> str:
+    """Remove invalid Unicode surrogates."""
+    return "".join(char for char in text if unicodedata.category(char) != "Cn")
+
+
+def remove_variation_selectors(text: str) -> str:
+    """Remove invisible variation selectors (U+FE0E, U+FE0F)."""
+    return re.sub(r"[\uFE0E\uFE0F]", "", text)
+
+
+def replace_emojis(line: str) -> str:
+    """Replace emoji characters with ASCII equivalents."""
+    emoji_replacements = {
+        "\U0001f602": ":-D",
+        "\U0001f60a": ":-)",
+        "\U0001f622": ":'(",
+        "\U0001f60e": "B-)",
+        "\U00002764": "<3",
+        "\U0001f50d": ":emoji:",
+    }
+    line = unicodedata.normalize("NFC", line)
+    line = remove_invalid_surrogates(line)
+    line = remove_variation_selectors(line)
+    emoji_pattern = re.compile(
+        r"[\U0001f600-\U0001f64f\U0001f300-\U0001f5ff"
+        r"\U0001f680-\U0001f6ff\U0001f700-\U0001f77f"
+        r"\U0001f900-\U0001faff]+",
+        flags=re.UNICODE,
+    )
+
+    def emoji_replacer(match):
+        return emoji_replacements.get(match.group(0), ":emoji:")
+
+    return emoji_pattern.sub(emoji_replacer, line).encode("utf-8", errors="replace").decode("utf-8")
+
+
+def sanitize_output(raw: bytes) -> str:
+    """Full sanitization pipeline for container output."""
+    text = remove_ansi_escapes(raw)
+    text = replace_emojis(text)
+    text = remove_html_entities(text)
+    return text
+
+
+# ---------------------------------------------------------------------------
+# Nagios output formatting (T006)
+# ---------------------------------------------------------------------------
+
+def camelcase(label: str) -> str:
+    """Convert space-separated label to CamelCase."""
+    return "".join(word.capitalize() for word in label.strip().split())
+
+
+def format_perfdata(perfdata_list: List[Dict[str, Any]]) -> str:
+    """Format perfdata list as Nagios perfdata string.
+
+    All labels are single-quoted per the Nagios output contract.
+    """
+    parts = []
+    for pd in perfdata_list:
+        label = pd["label"]
+        value = pd["value"]
+        unit = pd.get("unit", "")
+        parts.append(f"'{label}'={value}{unit}")
+    return " ".join(parts)
+
+
+def nagios_exit(status: str, message: str, perfdata_str: str = "", long_output: str = "") -> int:
+    """Print Nagios status line and return exit code.
+
+    Args:
+        status: One of OK, WARNING, CRITICAL, UNKNOWN
+        message: Human-readable summary
+        perfdata_str: Pre-formatted perfdata string
+        long_output: Multi-line details (lines 2+)
+
+    Returns:
+        Nagios exit code integer
+    """
+    code_map = {"OK": EXIT_OK, "WARNING": EXIT_WARNING, "CRITICAL": EXIT_CRITICAL, "UNKNOWN": EXIT_UNKNOWN}
+    line1 = f"{status} - {message}"
+    if perfdata_str:
+        line1 += f" | {perfdata_str}"
+    print(line1)
+    if long_output:
+        print(long_output)
+    return code_map.get(status, EXIT_UNKNOWN)
+
+
+# ---------------------------------------------------------------------------
+# TESTNAME derivation and path template resolution (T005)
+# ---------------------------------------------------------------------------
+
+def derive_testname(hostname: str, servicedescription: str) -> str:
+    """Derive TESTNAME from hostname and service description.
+
+    TESTNAME is symbolic, not a path. Used as container name and PID identity.
+    """
+    return f"{hostname}/{servicedescription}"
+
+
+def derive_testident(hostname: str, servicedescription: str) -> str:
+    """Derive URL-encoded TESTIDENT for PID files and archive names."""
+    return urllib.parse.quote(f"{hostname}__{servicedescription}", safe="")
+
+
+def resolve_path_template(template: str, hostname: str, servicedescription: str) -> str:
+    """Replace %h and %s template variables in path strings."""
+    return template.replace("%h", hostname).replace("%s", servicedescription)
+
+
+def sanitize_container_name(testname: str) -> str:
+    """Sanitize testname for use as Podman container name."""
+    return re.sub(r"[^a-zA-Z0-9_.-]+", "_", testname.replace(" ", "_"))
+
+
+# ---------------------------------------------------------------------------
+# PID file concurrency control (T015)
+# ---------------------------------------------------------------------------
+
+def is_process_running(pid: int) -> bool:
+    """Check if a process with given PID is running."""
+    try:
+        os.kill(pid, 0)
+    except OSError:
+        return False
+    return True
+
+
+def check_pid_file(pid_file_path: str) -> Optional[int]:
+    """Check PID file. Returns existing PID if running, None otherwise."""
+    if not os.path.exists(pid_file_path):
+        return None
+    try:
+        with open(pid_file_path, "r") as f:
+            existing_pid = int(f.read().strip())
+        if is_process_running(existing_pid):
+            return existing_pid
+        else:
+            logger.debug(f"Found stale PID {existing_pid}. Overwriting.")
+            return None
+    except (ValueError, IOError) as e:
+        logger.warning(f"Could not read PID file {pid_file_path}: {e}")
+        return None
+
+
+def write_pid_file(pid_file_path: str) -> None:
+    """Write current PID to file."""
+    with open(pid_file_path, "w") as f:
+        f.write(str(os.getpid()))
+
+
+def remove_pid_file(pid_file_path: str) -> None:
+    """Remove PID file if it exists."""
+    try:
+        if os.path.exists(pid_file_path):
+            os.remove(pid_file_path)
+    except OSError as e:
+        logger.warning(f"Could not remove PID file {pid_file_path}: {e}")
+
+
+# ---------------------------------------------------------------------------
+# Container cleanup (T016)
+# ---------------------------------------------------------------------------
+
+def container_cleanup(container_bin: str, container_name: str) -> None:
+    """Remove stale container with same name via podman rm -f."""
+    cmd = [container_bin, "rm", "--force", "--filter", f"name=^{container_name}$"]
+    subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, encoding="utf-8")
+
+
+# ---------------------------------------------------------------------------
+# Container environment variable assembly (T007)
+# ---------------------------------------------------------------------------
+
+def build_env_vars(args) -> Dict[str, str]:
+    """Build container environment variable dict from CLI args."""
+    env = {
+        "TEST_SOURCE": args.test_source,
+        "RESULT_DEST": args.result_dest,
+        "LOGGING": args.logging,
+        "NAGIOS_HOSTNAME": args.host_name,
+        "NAGIOS_SERVICEDESC": args.service_description,
+        "PWTIMEOUT": str(args.timeout),
+        "PROBE_LOCATION": args.probe_location,
+        "TESTIDENT": derive_testident(args.host_name, args.service_description),
+        "TERM": "dumb",
+        "FORCE_COLOR": "false",
+    }
+
+    if args.debug:
+        env["DEBUG"] = "1"
+
+    # S3 credentials (when S3 plugins active)
+    if args.s3_endpoint:
+        env["S3_ENDPOINT"] = args.s3_endpoint
+    if args.aws_access_key_id:
+        env["AWS_ACCESS_KEY_ID"] = args.aws_access_key_id
+    if args.aws_secret_access_key:
+        env["AWS_SECRET_ACCESS_KEY"] = args.aws_secret_access_key
+    if args.s3_bucket:
+        env["S3_BUCKET"] = args.s3_bucket
+    if args.s3_report_bucket:
+        env["S3_REPORT_BUCKET"] = args.s3_report_bucket
+    if args.s3_report_path:
+        env["REPORT_PATH"] = args.s3_report_path
+
+    # Loki credentials (when logging=loki)
+    if args.loki_endpoint:
+        env["LOKI_ENDPOINT"] = args.loki_endpoint
+    if args.loki_user:
+        env["LOKI_USER"] = args.loki_user
+    if args.loki_password:
+        env["LOKI_PASSWORD"] = args.loki_password
+    if args.loki_proxy:
+        env["LOKI_PROXY"] = args.loki_proxy
+
+    # Naemon state info
+    if args.current_status:
+        env["NAGIOS_CURRENT_STATUS"] = args.current_status
+
+    return env
+
+
+# ---------------------------------------------------------------------------
+# Podman command building (T008)
+# ---------------------------------------------------------------------------
+
+def build_podman_command(container_bin: str, container_name: str, args, env_vars: Dict[str, str]) -> List[str]:
+    """Build complete podman run command."""
+    cgroup_parent = container_name.replace("-", "_") + ".slice"
+
+    cmd = [
+        container_bin,
+        "run",
+        "--rm",
+        "--interactive",
+        "--log-driver=none",
+        "--hostname", os.uname().nodename,
+        "--name", container_name,
+        "--cgroup-parent", cgroup_parent,
+    ]
+
+    # Resource limits (FR-006: CPU hardcoded at 2)
+    cmd.extend(["--cpus", str(DEFAULT_CPU_COUNT)])
+    memory_limit = args.memory_limit if args.memory_limit else DEFAULT_MEMORY_LIMIT
+    if memory_limit and memory_limit[-1] not in "bkmg":
+        memory_limit += "g"
+    cmd.extend(["--memory", memory_limit])
+
+    # Environment variables
+    for key, value in env_vars.items():
+        cmd.extend(["--env", f"{key}={value}"])
+
+    # Conditional volume mounts
+    hostname = args.host_name
+    servicedescription = args.service_description
+    test_dir = resolve_path_template(args.test_dir, hostname, servicedescription)
+    result_dir = resolve_path_template(args.result_dir, hostname, servicedescription)
+
+    if args.test_source == "local":
+        cmd.extend(["--volume", f"{os.path.abspath(test_dir)}:/home/pwuser/tests:ro,z"])
+    if args.result_dest == "local":
+        cmd.extend(["--volume", f"{os.path.abspath(result_dir)}:/home/pwuser/results:rw,z"])
+    if args.test_source == "s3":
+        cache_dir = args.testscripts_cache
+        cmd.extend(["--volume", f"{os.path.abspath(cache_dir)}:/testscripts-cache:rw,z"])
+
+    # Shell mode: replace entrypoint with bash
+    if args.shell:
+        cmd.extend(["--tty", "--interactive", "--entrypoint", "bash"])
+
+    cmd.append(args.image)
+    return cmd
+
+
+# ---------------------------------------------------------------------------
+# Container execution (T017)
+# ---------------------------------------------------------------------------
+
+def execute_container(cmd: List[str], shell_mode: bool = False) -> Tuple[bytes, bytes, int]:
+    """Execute podman run and return (stdout, stderr, returncode)."""
+    logger.debug("running command: %s", " ".join(cmd))
+    if shell_mode:
+        proc = subprocess.run(cmd)
+        return b"", b"", proc.returncode
+    else:
+        proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        return proc.stdout, proc.stderr, proc.returncode
+
+
+# ---------------------------------------------------------------------------
+# Registry auth retry (T018)
+# ---------------------------------------------------------------------------
+
+def retry_with_auth(container_bin: str, cmd: List[str], image: str,
+                    username: str, password: str) -> Tuple[bytes, bytes, int]:
+    """Attempt podman login and retry the container command."""
+    if "/" not in image:
+        return b"", b"", EXIT_CRITICAL
+
+    registry = image.split("/")[0]
+    login_cmd = [container_bin, "login", "-u", username, "-p", password, registry]
+    logger.debug("login as %s at registry %s", username, registry)
+    login = subprocess.run(login_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+    if login.returncode == 0:
+        logger.debug("re-running command: %s", " ".join(cmd))
+        proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        return proc.stdout, proc.stderr, proc.returncode
+    else:
+        logger.debug("login failed")
+        return b"", b"", EXIT_CRITICAL
+
+
+# ---------------------------------------------------------------------------
+# steps.json parsing (T019)
+# ---------------------------------------------------------------------------
+
+def parse_steps_json(json_path: str) -> Optional[dict]:
+    """Parse steps.json file. Returns parsed dict or None."""
+    if not os.path.exists(json_path):
+        return None
+    try:
+        with open(json_path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (json.JSONDecodeError, IOError) as e:
+        logger.warning(f"Could not parse {json_path}: {e}")
+        return None
+
+
+def extract_perfdata_from_steps(subjson: dict, level: int = 0, prefix: str = "") -> List[Dict[str, Any]]:
+    """Recursively extract perfdata from steps.json structure.
+
+    Returns list of perfdata dicts with label, value, unit.
+    """
+    perfdata = []
+
+    for suite in subjson.get("suites", []):
+        if level == 0 and len(subjson["suites"]) > 1:
+            new_prefix = camelcase(os.path.basename(suite["title"]).replace(".test.ts", ""))
+        elif level == 0:
+            new_prefix = prefix
+        else:
+            new_prefix = prefix + camelcase(suite["title"])
+        perfdata.extend(extract_perfdata_from_steps(suite, level + 1, new_prefix))
+
+    for spec in subjson.get("specs", []):
+        new_prefix = prefix + camelcase(spec["title"])
+        perfdata.extend(extract_perfdata_from_steps(spec, level + 1, new_prefix))
+
+    for test in subjson.get("tests", []):
+        if len(subjson["tests"]) > 1:
+            new_prefix = prefix + camelcase(test["projectName"])
+        else:
+            new_prefix = prefix
+        if len(test["results"]) > 0:
+            perfdata.extend(extract_perfdata_from_steps(test["results"][0], level + 1, new_prefix))
+            if "duration" in test["results"][0]:
+                perfdata.append({"label": new_prefix + "_td", "value": test["results"][0]["duration"], "unit": "ms"})
+
+        # Annotation-based perfdata
+        for annotation in test.get("annotations", []):
+            if "type" in annotation and annotation["type"].startswith("perfdata_"):
+                m = re.match(r"([\d]+\.*[\d]*)([a-z%]*)", annotation.get("description", ""))
+                if m:
+                    suffix = "_cd" if m[2] and m[2].endswith("s") else "_cm"
+                    perfdata.append({
+                        "label": prefix + camelcase(annotation["type"].replace("perfdata_", "") + suffix),
+                        "value": m[1],
+                        "unit": m[2],
+                    })
+
+    for step in subjson.get("steps", []):
+        new_prefix = prefix + camelcase(step["title"])
+        perfdata.append({"label": new_prefix + "_sd", "value": step["duration"], "unit": "ms"})
+        perfdata.extend(extract_perfdata_from_steps(step, level + 1, new_prefix))
+
+    return perfdata
+
+
+def extract_output_from_steps(subjson: dict, level: int = 0, prefix: str = "") -> Tuple[str, bool]:
+    """Recursively extract stdout/stderr/errors from steps.json.
+
+    Returns (output_text, has_stderr).
+    """
+    output = ""
+    has_stderr = False
+
+    for suite in subjson.get("suites", []):
+        if level == 0 and len(subjson["suites"]) > 1:
+            new_prefix = os.path.basename(suite["title"]).replace(".test.ts", "")
+        elif level == 0:
+            new_prefix = prefix
+        else:
+            new_prefix = prefix + " - " + suite["title"]
+        sub_output, sub_stderr = extract_output_from_steps(suite, level + 1, new_prefix)
+        output += sub_output
+        has_stderr = has_stderr or sub_stderr
+
+    for spec in subjson.get("specs", []):
+        sub_output, sub_stderr = extract_output_from_steps(spec, level + 1, prefix + " - " + spec["title"])
+        output += sub_output
+        has_stderr = has_stderr or sub_stderr
+
+    for test in subjson.get("tests", []):
+        if len(subjson["tests"]) > 1:
+            new_prefix = prefix + " - " + test["projectName"]
+        else:
+            new_prefix = prefix
+        if len(test["results"]) > 0:
+            sub_output, sub_stderr = extract_output_from_steps(test["results"][0], level + 1, new_prefix)
+            output += sub_output
+            has_stderr = has_stderr or sub_stderr
+
+    for index, stdout_entry in enumerate(subjson.get("stdout", [])):
+        if index == 0:
+            output += "\n__Stdout " + prefix + "__"
+        text = stdout_entry.get("text", "")
+        if not text.startswith("NagiosPerfData:"):
+            output += "\n" + text.rstrip()
+
+    for index, stderr_entry in enumerate(subjson.get("stderr", [])):
+        if index == 0:
+            output += "\n__Stderr " + prefix + "__"
+        output += "\n" + stderr_entry.get("text", "").rstrip()
+        has_stderr = True
+
+    for index, error in enumerate(subjson.get("errors", [])):
+        if index == 0:
+            output += "\n__Errors " + prefix + "__"
+        msg = error.get("message", "")
+        output += "\n" + sanitize_output(replace_emojis(msg).encode("utf-8")).rstrip()
+
+    return output, has_stderr
+
+
+def extract_nagios_perfdata_from_stdout(subjson: dict, level: int = 0) -> List[Dict[str, Any]]:
+    """Extract NagiosPerfData: lines from stdout in steps.json."""
+    perfdata = []
+
+    for suite in subjson.get("suites", []):
+        perfdata.extend(extract_nagios_perfdata_from_stdout(suite, level + 1))
+    for spec in subjson.get("specs", []):
+        perfdata.extend(extract_nagios_perfdata_from_stdout(spec, level + 1))
+    for test in subjson.get("tests", []):
+        if len(test.get("results", [])) > 0:
+            perfdata.extend(extract_nagios_perfdata_from_stdout(test["results"][0], level + 1))
+
+    for stdout_entry in subjson.get("stdout", []):
+        text = stdout_entry.get("text", "")
+        m = re.match(r"NagiosPerfData:\s*'(.*?)'=([\d]+\.?[\d]*)([a-z%]*)", text)
+        if m:
+            perfdata.append({"label": m[1], "value": m[2], "unit": m[3]})
+
+    return perfdata
+
+
+def normalize_perfdata_labels(perfdata: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Normalize perfdata labels: strip suffixes for display."""
+    num_tests = sum(1 for pd in perfdata if pd["label"].endswith("_td"))
+
+    if num_tests == 1:
+        # Single test: simplify labels
+        name_test = None
+        for pd in perfdata:
+            if pd["label"].endswith("_td"):
+                name_test = re.sub(r"_td$", "", pd["label"])
+                break
+        if name_test:
+            result = []
+            for pd in perfdata:
+                label = pd["label"]
+                if label.endswith("_td"):
+                    result.append({"label": "TestDuration", "value": pd["value"], "unit": pd.get("unit", "")})
+                elif any(label.endswith(s) for s in ["_sd", "_cd", "_cm"]):
+                    result.append({"label": label.replace(name_test, ""), "value": pd["value"], "unit": pd.get("unit", "")})
+                else:
+                    result.append(pd)
+            perfdata = result
+    else:
+        # Multiple tests: expand _td to _test_duration
+        perfdata = [
+            {"label": re.sub(r"_td$", "_test_duration", pd["label"]), "value": pd["value"], "unit": pd.get("unit", "")}
+            if pd["label"].endswith("_td") else pd
+            for pd in perfdata
+        ]
+
+    # Strip remaining suffixes for final output
+    result = []
+    for pd in perfdata:
+        label = pd["label"]
+        for suffix in ["_sd", "_cd", "_cm"]:
+            label = re.sub(f"{suffix}$", "", label)
+        result.append({"label": label, "value": pd["value"], "unit": pd.get("unit", "")})
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Exit code determination (T020)
+# ---------------------------------------------------------------------------
+
+def check_timeout(stdout: str, stderr: str) -> bool:
+    """Detect timeout from container output.
+
+    Two sources:
+    - Playwright's own per-test timeout message (when playwright.config.ts
+      timeout fires before the outer coreutils timeout)
+    - PWTIMEOUT_EXCEEDED marker printed by run.py when coreutils timeout (124/137)
+      kills the Playwright process before it can print its own message
+    """
+    return bool(
+        "PWTIMEOUT_EXCEEDED" in stdout
+        or "ran into a timeout after" in stderr
+        or re.search(r"Test timeout of \d+ms exceeded", stdout)
+        or re.search(r"Timeout \d+ms exceeded", stdout)
+    )
+
+
+def check_s3_upload_failure(stdout: str, stderr: str) -> bool:
+    """Detect S3 upload failure from container output."""
+    return "S3UPLOADHASFAILED" in stderr or "S3UPLOADHASFAILED" in stdout
+
+
+def check_duplicate_container(stderr: str) -> bool:
+    """Detect duplicate container error."""
+    return "Error: creating container storage" in stderr and "is already in use" in stderr
+
+
+# ---------------------------------------------------------------------------
+# Report URL template resolution (T023)
+# ---------------------------------------------------------------------------
+
+def resolve_report_url(template: str, hostname: str, servicedescription: str,
+                       testident: str, probe_location: str, s3_report_bucket: str,
+                       timestamp: str) -> str:
+    """Resolve report URL template variables."""
+    url = template
+    url = url.replace("%h", hostname)
+    url = url.replace("%s", servicedescription)
+    url = url.replace("%i", testident)
+    url = url.replace("%l", probe_location)
+    url = url.replace("%b", s3_report_bucket or "")
+    url = url.replace("%t", timestamp)
+    return url
+
+
+# ---------------------------------------------------------------------------
+# CgroupPoller (T027-T031)
+# ---------------------------------------------------------------------------
+
+class CgroupPoller:
+    """Polls cgroup v2 files during container execution to collect resource metrics.
+
+    Runs in a daemon thread at CGROUP_POLL_INTERVAL_SEC intervals.
+    """
+
+    def __init__(self, container_name: str, cpu_count: int) -> None:
+        self._container_name = container_name
+        self._cgroup_parent = container_name.replace("-", "_")
+        self._cpu_count = cpu_count
+        self._scope_path: Optional[str] = None
+        self._collection_failed = False
+        self._collection_errors: set = set()
+        self._samples: List[dict] = []
+        self._stop_event = threading.Event()
+        self._prev_cpu_usec: Optional[int] = None
+        self._prev_time: Optional[float] = None
+        self._peak_cpu_pct = 0.0
+        self._thread: Optional[threading.Thread] = None
+
+    def start(self) -> None:
+        """Spawn the daemon polling thread."""
+        self._thread = threading.Thread(target=self._poll_loop, daemon=True)
+        self._thread.start()
+
+    def stop(self) -> None:
+        """Signal the polling thread to exit and wait for it."""
+        self._stop_event.set()
+        if self._thread:
+            self._thread.join(timeout=2)
+
+    def _poll_loop(self) -> None:
+        while not self._stop_event.is_set():
+            self._poll_once()
+            self._stop_event.wait(CGROUP_POLL_INTERVAL_SEC)
+        # Final best-effort sample
+        self._poll_once()
+
+    def _find_live_scope(self, scopes: List[str], parent: str) -> Optional[str]:
+        """Among multiple scopes, return the one with live PIDs."""
+        live = []
+        for scope in scopes:
+            try:
+                with open(os.path.join(parent, scope, "cgroup.procs")) as f:
+                    pids = f.read().split()
+                if pids:
+                    live.append((scope, pids))
+            except OSError:
+                continue
+
+        if len(live) == 1:
+            return live[0][0]
+        if len(live) == 0:
+            return None
+
+        # Multiple live scopes — use /proc/<pid>/cmdline to find run.py
+        for scope, pids in live:
+            for pid in pids:
+                try:
+                    with open(f"/proc/{pid}/cmdline") as f:
+                        if "run.py" in f.read():
+                            return scope
+                except OSError:
+                    continue
+        return None
+
+    def _discover_scope_path(self) -> Optional[str]:
+        """Locate the libpod-*.scope directory under the container's slice."""
+        uid = os.getuid()
+        parent = (
+            f"{CGROUP_BASE_PATH}/user.slice/"
+            f"user-{uid}.slice/"
+            f"user@{uid}.service/"
+            f"{self._cgroup_parent}.slice/"
+        )
+        try:
+            entries = os.listdir(parent)
+        except OSError:
+            return None
+
+        scopes = sorted(
+            e for e in entries
+            if e.startswith("libpod-") and not e.startswith("libpod-conmon-") and e.endswith(".scope")
+        )
+
+        if len(scopes) == 0:
+            return None
+        if len(scopes) > 1:
+            match = self._find_live_scope(scopes, parent)
+            if match is None:
+                self._collection_errors.add(f"multiple scopes in {parent}, none with live PIDs: {scopes}")
+                return None
+            self._scope_path = os.path.join(parent, match)
+            return self._scope_path
+
+        self._scope_path = os.path.join(parent, scopes[0])
+        return self._scope_path
+
+    def _poll_once(self) -> None:
+        if self._scope_path is None:
+            if self._discover_scope_path() is None:
+                return
+        elif not os.path.isdir(self._scope_path):
+            return  # cgroup already cleaned up (--rm)
+
+        now = time.time()
+
+        memory_current = self._read_single_int("memory.current")
+        memory_peak = self._read_single_int("memory.peak")
+        usage_usec = self._read_cpu_stat()
+        oom_kill = self._read_memory_events_oom()
+        io_bytes_read, io_bytes_write = self._read_io_stat()
+
+        # Per-interval CPU %
+        if self._prev_cpu_usec is not None and self._prev_time is not None:
+            delta_cpu_sec = (usage_usec - self._prev_cpu_usec) / 1_000_000
+            delta_wall_sec = now - self._prev_time
+            if delta_wall_sec > 0:
+                cpu_pct = min(delta_cpu_sec / (delta_wall_sec * self._cpu_count) * 100, 100.0)
+                self._peak_cpu_pct = max(self._peak_cpu_pct, cpu_pct)
+        self._prev_cpu_usec = usage_usec
+        self._prev_time = now
+
+        self._samples.append({
+            "memory_current": memory_current,
+            "memory_peak": memory_peak,
+            "usage_usec": usage_usec,
+            "oom_kill": oom_kill,
+            "io_bytes_read": io_bytes_read,
+            "io_bytes_write": io_bytes_write,
+        })
+
+    def _read_single_int(self, filename: str) -> int:
+        try:
+            with open(os.path.join(self._scope_path, filename)) as f:
+                return int(f.read().strip())
+        except (OSError, ValueError) as e:
+            self._collection_failed = True
+            self._collection_errors.add(str(e))
+            return 0
+
+    def _read_cpu_stat(self) -> int:
+        try:
+            with open(os.path.join(self._scope_path, "cpu.stat")) as f:
+                for line in f:
+                    if line.startswith("usage_usec"):
+                        return int(line.split()[1])
+        except (OSError, ValueError) as e:
+            self._collection_failed = True
+            self._collection_errors.add(str(e))
+        return 0
+
+    def _read_memory_events_oom(self) -> int:
+        try:
+            with open(os.path.join(self._scope_path, "memory.events")) as f:
+                for line in f:
+                    if line.startswith("oom_kill"):
+                        return int(line.split()[1])
+        except (OSError, ValueError) as e:
+            self._collection_failed = True
+            self._collection_errors.add(str(e))
+        return 0
+
+    def _read_io_stat(self) -> Tuple[int, int]:
+        io_read = 0
+        io_write = 0
+        try:
+            with open(os.path.join(self._scope_path, "io.stat")) as f:
+                for line in f:
+                    for field in line.split():
+                        if field.startswith("rbytes="):
+                            io_read += int(field.split("=")[1])
+                        elif field.startswith("wbytes="):
+                            io_write += int(field.split("=")[1])
+        except (OSError, ValueError) as e:
+            self._collection_failed = True
+            self._collection_errors.add(str(e))
+        return io_read, io_write
+
+    def get_metrics(self) -> dict:
+        """Return aggregated metrics after polling has stopped."""
+        if not self._samples:
+            return {
+                "sample_count": 0,
+                "collection_failed": True,
+                "collection_errors": sorted(self._collection_errors),
+                "cpu_usage_sec": 0.0,
+                "peak_cpu_pct": 0.0,
+                "memory_current": 0,
+                "memory_peak": 0,
+                "io_bytes_read": 0,
+                "io_bytes_write": 0,
+                "oom_kill": 0,
+            }
+
+        last = self._samples[-1]
+        peak_mem = max(s["memory_peak"] for s in self._samples)
+
+        return {
+            "sample_count": len(self._samples),
+            "collection_failed": self._collection_failed,
+            "collection_errors": sorted(self._collection_errors),
+            "cpu_usage_sec": last["usage_usec"] / 1_000_000,
+            "peak_cpu_pct": self._peak_cpu_pct,
+            "memory_current": last["memory_current"],
+            "memory_peak": peak_mem,
+            "io_bytes_read": last["io_bytes_read"],
+            "io_bytes_write": last["io_bytes_write"],
+            "oom_kill": last["oom_kill"],
+        }
+
+
+# ---------------------------------------------------------------------------
+# ContainerEnv detection
+# ---------------------------------------------------------------------------
+
+class ContainerEnv:
+    """Detect Podman and cgroup version."""
+
+    def __init__(self) -> None:
+        self.has_cgroups2: bool = False
+        self.ok: bool = True
+        self.container_bin: Optional[str] = None
+        self.failure: Optional[str] = None
+
+        self.container_bin = shutil.which("podman")
+        if not self.container_bin:
+            self.failure = "UNKNOWN - Podman not installed"
+            self.ok = False
+            return
+
+        # Check cgroup version
+        try:
+            import yaml
+            cmd = [self.container_bin, "info"]
+            info = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, encoding="utf-8")
+            if info.returncode == 0:
+                yaml_data = yaml.safe_load(info.stdout)
+                try:
+                    self.has_cgroups2 = yaml_data["host"]["cgroupVersion"] == "v2"
+                except (KeyError, TypeError):
+                    self.has_cgroups2 = False
+        except ImportError:
+            # pyyaml not available — try heuristic
+            self.has_cgroups2 = os.path.exists("/sys/fs/cgroup/cgroup.controllers")
+
+
+# ---------------------------------------------------------------------------
+# Main execution flow
+# ---------------------------------------------------------------------------
+
+def build_argument_parser() -> ArgumentParser:
+    """Build CLI argument parser with all 26+ arguments from data-model.md."""
+    parser = ArgumentParser(description="CEP - Containerized E2E Playwright monitoring plugin")
+
+    # Required arguments
+    parser.add_argument("--host-name", required=True, dest="host_name",
+                        help="Naemon $HOSTNAME$ macro")
+    parser.add_argument("--service-description", required=True, dest="service_description",
+                        help="Naemon $SERVICEDESC$ macro")
+    parser.add_argument("--image", required=True,
+                        help="Podman image name with tag")
+    parser.add_argument("--probe-location", required=True, dest="probe_location",
+                        help="Geographic location identifier")
+
+    # Plugin selectors
+    parser.add_argument("--test-source", default="local", dest="test_source",
+                        choices=["local", "s3"],
+                        help="Test acquisition plugin (default: local)")
+    parser.add_argument("--result-dest", default="local", dest="result_dest",
+                        choices=["local", "s3"],
+                        help="Result delivery plugin (default: local)")
+    parser.add_argument("--logging", default="none",
+                        choices=["none", "loki"],
+                        help="Log shipping backend (default: none)")
+
+    # Path arguments
+    omd_root = os.environ.get("OMD_ROOT", "")
+    parser.add_argument("--test-dir", dest="test_dir",
+                        default=omd_root + "/etc/check_cep/tests/%h/%s",
+                        help="Host-side test scripts directory (supports %%h, %%s)")
+    parser.add_argument("--result-dir", dest="result_dir",
+                        default=omd_root + "/var/tmp/check_cep/%h/%s",
+                        help="Host-side results directory (supports %%h, %%s)")
+    parser.add_argument("--testscripts-cache", dest="testscripts_cache",
+                        default=omd_root + "/var/tmp/testscripts_cache",
+                        help="Cache directory for S3 test scripts")
+
+    # Execution settings
+    parser.add_argument("--timeout", type=int, default=60,
+                        help="Container timeout in seconds (default: 60)")
+    parser.add_argument("--memory-limit", dest="memory_limit", default=DEFAULT_MEMORY_LIMIT,
+                        help="Container memory limit (default: 2g)")
+
+    # Debug/shell
+    parser.add_argument("--debug", action="store_true", default=False,
+                        help="Enable verbose logging")
+    parser.add_argument("--shell", action="store_true", default=False,
+                        help="Start container with bash instead of run.py")
+
+    # Report URL
+    parser.add_argument("--report-url", dest="report_url", default=None,
+                        help="URL template for HTML report link")
+    parser.add_argument("--href-target", dest="href_target", default="_blank",
+                        help="HTML target for report link (default: _blank)")
+
+    # Registry auth
+    parser.add_argument("--registry-username", dest="registry_username", default=None)
+    parser.add_argument("--registry-password", dest="registry_password", default=None)
+
+    # S3 arguments
+    parser.add_argument("--s3-endpoint", dest="s3_endpoint", default=None)
+    parser.add_argument("--aws-access-key-id", dest="aws_access_key_id", default=None)
+    parser.add_argument("--aws-secret-access-key", dest="aws_secret_access_key", default=None)
+    parser.add_argument("--s3-bucket", dest="s3_bucket", default=None)
+    parser.add_argument("--s3-report-bucket", dest="s3_report_bucket", default=None)
+    parser.add_argument("--s3-report-path", dest="s3_report_path", default=None)
+    parser.add_argument("--s3-report-url", dest="s3_report_url", default=None)
+
+    # Loki arguments
+    parser.add_argument("--loki-endpoint", dest="loki_endpoint", default=None)
+    parser.add_argument("--loki-user", dest="loki_user", default=None)
+    parser.add_argument("--loki-password", dest="loki_password", default=None)
+    parser.add_argument("--loki-proxy", dest="loki_proxy", default=None)
+
+    # Naemon state
+    parser.add_argument("--current-status", dest="current_status", default=None,
+                        help="$SERVICESTATE$/$SERVICESTATETYPE$/...")
+
+    return parser
+
+
+def main() -> int:
+    """Main entry point."""
+    parser = build_argument_parser()
+    args = parser.parse_args()
+
+    # ---------------------------------------------------------------------------
+    # Logging setup (T032)
+    # ---------------------------------------------------------------------------
+    omd_root = os.environ.get("OMD_ROOT", "")
+    log_path = omd_root + "/var/log/check_cep.log"
+
+    logger.setLevel(logging.DEBUG if args.debug else logging.CRITICAL)
+    try:
+        file_handler = RotatingFileHandler(log_path, maxBytes=LOG_MAX_BYTES, backupCount=LOG_BACKUP_COUNT)
+        formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
+        file_handler.setFormatter(formatter)
+        file_handler.setLevel(logging.DEBUG if args.debug else logging.CRITICAL)
+        logger.addHandler(file_handler)
+    except (OSError, IOError):
+        pass  # Log dir may not exist outside OMD
+
+    if args.debug:
+        console_handler = logging.StreamHandler()
+        console_handler.setFormatter(logging.Formatter("%(asctime)s - %(levelname)s - %(message)s"))
+        console_handler.setLevel(logging.DEBUG)
+        logger.addHandler(console_handler)
+
+    # ---------------------------------------------------------------------------
+    # Detect container environment
+    # ---------------------------------------------------------------------------
+    containerenv = ContainerEnv()
+    if not containerenv.ok:
+        return nagios_exit("UNKNOWN", containerenv.failure)
+
+    # ---------------------------------------------------------------------------
+    # Derive names and paths
+    # ---------------------------------------------------------------------------
+    hostname = args.host_name
+    servicedescription = args.service_description
+    testname = derive_testname(hostname, servicedescription)
+    testident = derive_testident(hostname, servicedescription)
+    container_name = sanitize_container_name(testname)
+    result_dir = resolve_path_template(args.result_dir, hostname, servicedescription)
+
+    # ---------------------------------------------------------------------------
+    # PID file concurrency check (T015)
+    # ---------------------------------------------------------------------------
+    if args.result_dest == "local":
+        os.makedirs(result_dir, mode=PERM_WORLD_RWX, exist_ok=True)
+        os.chmod(result_dir, PERM_WORLD_RWX)
+
+    pid_file = os.path.join(result_dir, f"running_{testident}")
+    existing_pid = check_pid_file(pid_file)
+    if existing_pid is not None:
+        return nagios_exit("UNKNOWN", f"test {servicedescription} duplicate, "
+                          f"process with PID {existing_pid} is already running")
+
+    write_pid_file(pid_file)
+
+    # ---------------------------------------------------------------------------
+    # Container cleanup (T016)
+    # ---------------------------------------------------------------------------
+    container_cleanup(containerenv.container_bin, container_name)
+
+    # ---------------------------------------------------------------------------
+    # Build and execute container (T007, T008, T017)
+    # ---------------------------------------------------------------------------
+    start_time = time.time()
+    env_vars = build_env_vars(args)
+    cmd = build_podman_command(containerenv.container_bin, container_name, args, env_vars)
+
+    # Start cgroup poller (T027)
+    cgroup_poller = None
+    if containerenv.has_cgroups2:
+        cgroup_poller = CgroupPoller(container_name, DEFAULT_CPU_COUNT)
+        cgroup_poller.start()
+
+    stdout, stderr, returncode = execute_container(cmd, shell_mode=args.shell)
+
+    # Stop cgroup poller
+    if cgroup_poller:
+        cgroup_poller.stop()
+
+    wall_duration = int(time.time() - start_time)
+
+    # Cleanup PID file
+    remove_pid_file(pid_file)
+
+    # Shell mode: just exit
+    if args.shell:
+        return returncode
+
+    # ---------------------------------------------------------------------------
+    # Auth retry (T018)
+    # ---------------------------------------------------------------------------
+    if (returncode == EXIT_AUTH_REQUIRED
+            and b"Authentication is required" in stderr
+            and args.registry_username):
+        stdout, stderr, returncode = retry_with_auth(
+            containerenv.container_bin, cmd, args.image,
+            args.registry_username, args.registry_password)
+    elif returncode == EXIT_AUTH_REQUIRED:
+        returncode = EXIT_CRITICAL
+
+    # ---------------------------------------------------------------------------
+    # Sanitize container output (T034)
+    # ---------------------------------------------------------------------------
+    stdout_str = sanitize_output(stdout)
+    stderr_str = sanitize_output(stderr)
+
+    # ---------------------------------------------------------------------------
+    # Parse steps.json (T019)
+    # ---------------------------------------------------------------------------
+    perfdata = []
+    container_output = ""
+    has_stderr_in_steps = False
+
+    if args.result_dest == "local":
+        steps_json_path = os.path.join(result_dir, "steps.json")
+        steps_data = parse_steps_json(steps_json_path)
+    else:
+        # For S3 mode, steps.json is not on host — use stdout as container output
+        steps_data = None
+
+    if steps_data is not None:
+        perfdata.extend(extract_perfdata_from_steps(steps_data))
+        perfdata.extend(extract_nagios_perfdata_from_stdout(steps_data))
+        container_output, has_stderr_in_steps = extract_output_from_steps(steps_data)
+    else:
+        container_output = stdout_str
+        if stderr_str:
+            container_output += "\n" + stderr_str
+
+    container_output = container_output.strip()
+    if not container_output:
+        container_output = "NO CONTAINER OUTPUT"
+
+    # Extract Loki errors from stdout
+    loki_errors = re.findall(r"LOKIERROR \[\[\[(.*?)\]\]\]", stdout_str)
+    for loki_err in loki_errors:
+        container_output += "\n" + loki_err
+
+    # ---------------------------------------------------------------------------
+    # Add wall-clock duration perfdata
+    # ---------------------------------------------------------------------------
+    perfdata.append({"label": "duration", "value": wall_duration, "unit": "s"})
+
+    # ---------------------------------------------------------------------------
+    # Add cgroup metrics perfdata (T030)
+    # ---------------------------------------------------------------------------
+    oom_killed = False
+    if cgroup_poller:
+        metrics = cgroup_poller.get_metrics()
+        perfdata.append({"label": "podman_metric_collection_failed", "value": 1 if metrics["collection_failed"] else 0})
+
+        if metrics["sample_count"] > 0:
+            perfdata.append({"label": "podman_cpu_usage", "value": f"{metrics['cpu_usage_sec']:.2f}", "unit": "s"})
+            perfdata.append({"label": "podman_peak_cpu", "value": f"{metrics['peak_cpu_pct']:.1f}", "unit": "%"})
+            perfdata.append({"label": "podman_memory_current", "value": metrics["memory_current"], "unit": "B"})
+            perfdata.append({"label": "podman_memory_peak", "value": metrics["memory_peak"], "unit": "B"})
+            perfdata.append({"label": "podman_io_bytes_read", "value": metrics["io_bytes_read"], "unit": "B"})
+            perfdata.append({"label": "podman_io_bytes_write", "value": metrics["io_bytes_write"], "unit": "B"})
+
+            oom_kill_val = 1 if metrics["oom_kill"] > 0 else 0
+            perfdata.append({"label": "podman_oom_killed", "value": oom_kill_val})
+            if oom_kill_val:
+                oom_killed = True
+                container_output = "OOM_KILLED: container was terminated by out-of-memory killer"
+
+        if metrics["collection_failed"]:
+            errors = metrics.get("collection_errors", [])
+            if errors:
+                container_output += "\ncgroup metrics: " + "; ".join(errors)
+
+    # ---------------------------------------------------------------------------
+    # Normalize and format perfdata
+    # ---------------------------------------------------------------------------
+    perfdata = normalize_perfdata_labels(perfdata)
+    perfdata_str = format_perfdata(perfdata)
+
+    # ---------------------------------------------------------------------------
+    # Exit code determination chain (T020)
+    # ---------------------------------------------------------------------------
+    timed_out = check_timeout(stdout_str, stderr_str)
+    s3_failed = check_s3_upload_failure(stdout_str, stderr_str)
+    duplicate = check_duplicate_container(stderr_str)
+
+    # Read test-meta.json for timestamp (for report URL)
+    test_meta = {}
+    if args.result_dest == "local":
+        meta_path = os.path.join(result_dir, "test-meta.json")
+        if os.path.exists(meta_path):
+            try:
+                with open(meta_path, "r") as f:
+                    test_meta = json.load(f)
+            except (json.JSONDecodeError, IOError):
+                pass
+
+    # Build report annotation (T024)
+    annotation = ""
+    if args.report_url:
+        timestamp = test_meta.get("timestamp", str(int(time.time())))
+        resolved_url = resolve_report_url(
+            args.report_url, hostname, servicedescription, testident,
+            args.probe_location, args.s3_report_bucket or "", timestamp)
+        annotation = f' <a href="{urllib.parse.quote(resolved_url, safe=":/?&=")}" target="{args.href_target}">Report</a>'
+
+    # Exit code priority chain (T020, T031)
+    if oom_killed:
+        exit_code = nagios_exit("CRITICAL", f"test {servicedescription} OOM killed{annotation}",
+                               perfdata_str, container_output)
+    elif timed_out:
+        exit_code = nagios_exit("CRITICAL", f"test {servicedescription} timed out{annotation}",
+                               perfdata_str, container_output)
+    elif returncode != 0 and not duplicate:
+        exit_code = nagios_exit("CRITICAL", f"test {servicedescription} failed{annotation}",
+                               perfdata_str, container_output)
+    elif has_stderr_in_steps and returncode == 0:
+        exit_code = nagios_exit("WARNING", f"test {servicedescription} succeeded{annotation}",
+                               perfdata_str, container_output)
+    elif duplicate:
+        exit_code = nagios_exit("UNKNOWN",
+                               f"test {servicedescription} duplicate{annotation}, running on host {os.uname()[1]}",
+                               perfdata_str, container_output)
+    else:
+        exit_code = nagios_exit("OK", f"test {servicedescription} succeeded{annotation}",
+                               perfdata_str, container_output)
+
+    # S3 failure appended as warning text (doesn't change exit code)
+    if s3_failed:
+        print("REPORT UPLOAD TO S3 FAILED")
+
+    return exit_code
+
+
+if __name__ == "__main__":
+    sys.exit(main())
