@@ -100,6 +100,28 @@ def write_test_meta(results_path: str, hostname: str, servicedescription: str,
 
 
 # ---------------------------------------------------------------------------
+# Test discovery
+# ---------------------------------------------------------------------------
+
+def find_test_subdir(test_dir: str) -> str:
+    """Walk test_dir and return the directory containing the first *.test.ts file.
+
+    Skips 'functions', 'variables', and 'node_modules' directories — these are
+    shared-utility folders that never hold test entry points.
+
+    Raises RuntimeError if no *.test.ts file is found.
+    """
+    skip = {"functions", "variables", "node_modules"}
+    for root, dirs, files in os.walk(test_dir):
+        dirs[:] = [d for d in dirs if d not in skip]
+        for fname in files:
+            if fname.endswith(".test.ts") or fname.endswith(".test.js"):
+                logger.debug(f"Found test file: {os.path.join(root, fname)}")
+                return root
+    raise RuntimeError(f"No *.test.ts / *.test.js found under '{test_dir}'")
+
+
+# ---------------------------------------------------------------------------
 # Playwright invocation (T012)
 # ---------------------------------------------------------------------------
 
@@ -187,9 +209,16 @@ def main() -> int:
         print(f"UNKNOWN: Test acquisition failed: {e}")
         return 3
 
-    # Step 2: Run Playwright
+    # Step 2: Locate the test subfolder (playwright.config.ts lives next to *.test.ts)
+    try:
+        active_test_dir = find_test_subdir(test_dir)
+    except RuntimeError as e:
+        print(f"UNKNOWN: {e}")
+        return 3
+
+    # Step 3: Run Playwright from the subfolder that contains playwright.config.ts
     start_time = time.time()
-    exitcode = run_playwright(test_dir, results_dir, timeout_sec)
+    exitcode = run_playwright(active_test_dir, results_dir, timeout_sec)
     duration = time.time() - start_time
 
     # Normalize exit codes
@@ -199,17 +228,17 @@ def main() -> int:
     elif exitcode != 0 and exitcode != 3:
         exitcode = 2
 
-    # Step 3: Write test-meta.json
+    # Step 4: Write test-meta.json
     meta = write_test_meta(results_dir, hostname, servicedescription, exitcode, duration, probe_location)
 
-    # Step 4: Publish results (non-fatal)
+    # Step 5: Publish results (non-fatal)
     try:
         dest_module.publish_results(test_name, results_dir, exitcode)
     except Exception as e:
         print(f"S3UPLOADHASFAILED [[[publish_results error: {e}]]]")
         logger.error(f"publish_results failed: {e}")
 
-    # Step 5: Ship logs (optional, non-fatal)
+    # Step 6: Ship logs (optional, non-fatal)
     if logging_module is not None:
         try:
             summary = {

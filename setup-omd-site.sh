@@ -67,7 +67,43 @@ mkdir -p "$OMD_ROOT/var/tmp/check_cep"
 echo "  [ok] result dir      -> $OMD_ROOT/var/tmp/check_cep"
 
 # ---------------------------------------------------------------------------
-# 3. Container build context  ($OMD_ROOT/etc/check_cep/container/)
+# 3. Demo starter test  (DEMOHOST / DEMOSERVICE)
+# ---------------------------------------------------------------------------
+
+DEMO_DIR="$OMD_ROOT/etc/check_cep/tests/DEMOHOST/DEMOSERVICE"
+mkdir -p "$DEMO_DIR/functions"
+mkdir -p "$DEMO_DIR/variables"
+mkdir -p "$DEMO_DIR/bla/blub"
+
+cat > "$DEMO_DIR/bla/blub/playwright.config.ts" << 'PWCONFIG'
+import { defineConfig } from '@playwright/test';
+
+export default defineConfig({
+  testDir: './',
+  timeout: 30000,
+  use: {
+    headless: true,
+    viewport: { width: 1280, height: 720 },
+  },
+  projects: [
+    { name: 'chromium', use: { browserName: 'chromium' } },
+  ],
+});
+PWCONFIG
+
+cat > "$DEMO_DIR/bla/blub/consol.test.ts" << 'PWTEST'
+import { test, expect } from '@playwright/test';
+
+test('consol.de has Consulting & Solutions', async ({ page }) => {
+  await page.goto('https://www.consol.de');
+  await expect(page.locator('body')).toContainText('Consulting & Solutions');
+});
+PWTEST
+
+echo "  [ok] demo test       -> $DEMO_DIR"
+
+# ---------------------------------------------------------------------------
+# 4. Container build context  ($OMD_ROOT/etc/check_cep/container/)
 #    Contains everything needed to build the check_cep container image.
 # ---------------------------------------------------------------------------
 
