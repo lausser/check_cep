@@ -72,13 +72,9 @@ echo "  [ok] result dir      -> $OMD_ROOT/var/tmp/check_cep"
 # ---------------------------------------------------------------------------
 
 CONTAINER_DIR="$OMD_ROOT/etc/check_cep/container"
-mkdir -p "$CONTAINER_DIR/plugins"
+mkdir -p "$CONTAINER_DIR/image/plugins"
 
-cp "$REPO_DIR/src/Dockerfile"               "$CONTAINER_DIR/Dockerfile"
-cp "$REPO_DIR/src/package.json"             "$CONTAINER_DIR/package.json"
-cp "$REPO_DIR/src/package-lock.json"        "$CONTAINER_DIR/package-lock.json"
-cp "$REPO_DIR/src/container/run.py"         "$CONTAINER_DIR/run.py"
-cp "$REPO_DIR/src/container/plugins/"*.py   "$CONTAINER_DIR/plugins/"
+cp -r "$REPO_DIR/src/container/." "$CONTAINER_DIR/"
 
 echo "  [ok] container build context -> $CONTAINER_DIR"
 

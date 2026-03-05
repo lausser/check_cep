@@ -34,7 +34,7 @@ ENV NODE_PATH=/home/pwuser/node_modules \
     NODE_OPTIONS="--max-http-header-size=120480"
 
 # Optional npm dependencies: replace the zero-byte package.json and
-# package-lock.json in src/ with real ones to bake npm deps into the image.
+# package-lock.json in src/container/ with real ones to bake npm deps into the image.
 COPY --chown=pwuser:pwuser package.json package-lock.json ./
 RUN if [ -s package-lock.json ]; then \
         echo "--- Installing NPM packages from user-provided package-lock.json ---" && \
@@ -55,8 +55,8 @@ RUN rm -f package.json package-lock.json
 
 # Copy container-side code
 USER root
-COPY container/run.py /home/pwuser/run.py
-COPY container/plugins/ /home/pwuser/plugins/
+COPY image/run.py /home/pwuser/run.py
+COPY image/plugins/ /home/pwuser/plugins/
 RUN chmod 755 /home/pwuser/run.py && \
     chown -R pwuser:pwuser /home/pwuser/run.py /home/pwuser/plugins/
 
