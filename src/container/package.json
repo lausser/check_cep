@@ -1,0 +1,7 @@
+{
+  "name": "check-cep-container",
+  "private": true,
+  "dependencies": {
+    "@playwright/test": "^1.58.0"
+  }
+}

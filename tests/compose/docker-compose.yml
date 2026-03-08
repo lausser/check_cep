@@ -1,0 +1,35 @@
+version: "3.8"
+
+services:
+  minio:
+    image: quay.io/minio/minio:latest
+    command: server /data --console-address :9001
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 5s
+      timeout: 5s
+      retries: 6
+    networks:
+      - cep-test
+
+  loki:
+    image: grafana/loki:latest
+    ports:
+      - "3100:3100"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://localhost:3100/ready"]
+      interval: 5s
+      timeout: 5s
+      retries: 6
+    networks:
+      - cep-test
+
+networks:
+  cep-test:
+    driver: bridge

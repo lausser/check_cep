@@ -125,7 +125,8 @@ def find_test_subdir(test_dir: str) -> str:
 # Playwright invocation (T012)
 # ---------------------------------------------------------------------------
 
-def run_playwright(test_dir: str, results_path: str, timeout_sec: int) -> int:
+def run_playwright(test_dir: str, results_path: str, timeout_sec: int,
+                   headed: bool = False) -> int:
     """Run Playwright tests with coreutils timeout wrapping.
 
     Returns Playwright exit code.
@@ -144,6 +145,9 @@ def run_playwright(test_dir: str, results_path: str, timeout_sec: int) -> int:
     cmd = (f"timeout {timeout_val} npx playwright test"
            f" --output {os.path.join(results_path, 'test-results')}"
            f" --reporter=line,html,json")
+
+    if headed:
+        cmd += " --headed"
 
     logger.debug(f"Running: {cmd} in {test_dir}")
     proc = subprocess.run(cmd, shell=True, capture_output=True, cwd=test_dir, env=env)
@@ -181,6 +185,7 @@ def main() -> int:
     timeout_sec = int(os.environ.get("PWTIMEOUT", "60"))
     probe_location = os.environ.get("PROBE_LOCATION", "unknown")
     debug = os.environ.get("DEBUG", "")
+    headed = bool(os.environ.get("HEADED", ""))
 
     # Configure logging
     if debug:
@@ -218,7 +223,7 @@ def main() -> int:
 
     # Step 3: Run Playwright from the subfolder that contains playwright.config.ts
     start_time = time.time()
-    exitcode = run_playwright(active_test_dir, results_dir, timeout_sec)
+    exitcode = run_playwright(active_test_dir, results_dir, timeout_sec, headed=headed)
     duration = time.time() - start_time
 
     # Normalize exit codes

@@ -1,8 +1,8 @@
-ARG PLAYWRIGHT_VERSION
-FROM mcr.microsoft.com/playwright:${PLAYWRIGHT_VERSION}-jammy
+ARG PLAYWRIGHT_VERSION=v1.58.2
+FROM mcr.microsoft.com/playwright:${PLAYWRIGHT_VERSION}-noble
 
 # Re-declare ARG after FROM
-ARG PLAYWRIGHT_VERSION
+ARG PLAYWRIGHT_VERSION=v1.58.2
 ENV PLAYWRIGHT_VERSION=${PLAYWRIGHT_VERSION} \
     DEBIAN_FRONTEND="noninteractive" \
     TZ="UTC"
@@ -16,13 +16,13 @@ RUN apt-get update && \
     fontconfig \
     && apt-get clean && \
     rm -rf /var/lib/apt/lists/* && \
-    pip install --no-cache-dir boto3 && \
+    pip install --no-cache-dir --break-system-packages boto3 && \
     echo "pwuser ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/pwuser && \
     chmod 640 /etc/sudoers.d/pwuser
 
 # Create test and results directories owned by pwuser (FR-017).
-RUN mkdir -p /home/pwuser/tests /home/pwuser/results && \
-    chown pwuser:pwuser /home/pwuser/tests /home/pwuser/results
+RUN mkdir -p /home/pwuser/tests /home/pwuser/results /home/pwuser/testscripts-cache && \
+    chown pwuser:pwuser /home/pwuser/tests /home/pwuser/results /home/pwuser/testscripts-cache
 
 # Switch to pwuser
 USER pwuser
