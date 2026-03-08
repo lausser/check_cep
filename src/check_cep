@@ -115,6 +115,33 @@ def sanitize_output(raw: bytes) -> str:
     return text
 
 
+def truncate_playwright_diff(msg: str) -> str:
+    """Remove the 'Received string' block from Playwright assertion diffs.
+
+    When toContainText() fails against a large locator such as locator('body'),
+    Playwright dumps the entire element text as the received value — potentially
+    thousands of lines.  We keep the header lines and the expected (-) lines
+    so the failure reason is clear, but drop all received (+) lines.
+
+    Messages that do not match the Playwright diff format are returned unchanged.
+    """
+    lines = msg.splitlines()
+    received_idx = None
+    for i, line in enumerate(lines):
+        if re.search(r'\+ Received string\s+\+\s+\d+', line):
+            received_idx = i
+            break
+    if received_idx is None:
+        return msg
+    kept = lines[:received_idx + 1]
+    expected_lines = [l for l in lines[received_idx + 1:] if l.startswith('- ')]
+    if expected_lines:
+        kept.append('')
+        kept.extend(expected_lines)
+    kept.append('[received string omitted]')
+    return '\n'.join(kept)
+
+
 # ---------------------------------------------------------------------------
 # Nagios output formatting (T006)
 # ---------------------------------------------------------------------------
@@ -243,6 +270,38 @@ def container_cleanup(container_bin: str, container_name: str) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Headed mode (X11 forwarding for debug)
+# ---------------------------------------------------------------------------
+
+def validate_headed_mode() -> Optional[str]:
+    """Pre-flight checks for --headed mode.
+
+    Returns error message string or None if everything is OK.
+    """
+    display = os.environ.get("DISPLAY")
+    if not display:
+        return "--headed requires DISPLAY to be set"
+
+    # Extract display number from e.g. ":0" or ":1.0"
+    match = re.match(r":(\d+)", display)
+    if match:
+        socket_path = f"/tmp/.X11-unix/X{match.group(1)}"
+        if not os.path.exists(socket_path):
+            return f"--headed: X11 socket {socket_path} not found"
+
+    if not shutil.which("xhost"):
+        return "--headed requires xhost to be installed"
+
+    return None
+
+
+def setup_x11_access() -> None:
+    """Run xhost +local: to allow container X11 connections."""
+    subprocess.run(["xhost", "+local:"],
+                   stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+
+# ---------------------------------------------------------------------------
 # Container environment variable assembly (T007)
 # ---------------------------------------------------------------------------
 
@@ -263,6 +322,9 @@ def build_env_vars(args) -> Dict[str, str]:
 
     if args.debug:
         env["DEBUG"] = "1"
+
+    if args.headed:
+        env["HEADED"] = "1"
 
     # S3 credentials (when S3 plugins active)
     if args.s3_endpoint:
@@ -333,11 +395,27 @@ def build_podman_command(container_bin: str, container_name: str, args, env_vars
 
     if args.test_source == "local":
         cmd.extend(["--volume", f"{os.path.abspath(test_dir)}:/home/pwuser/tests:ro,z"])
-    if args.result_dest == "local":
-        cmd.extend(["--volume", f"{os.path.abspath(result_dir)}:/home/pwuser/results:rw,z"])
+    cmd.extend(["--volume", f"{os.path.abspath(result_dir)}:/home/pwuser/results:rw,z"])
     if args.test_source == "s3":
         cache_dir = args.testscripts_cache
-        cmd.extend(["--volume", f"{os.path.abspath(cache_dir)}:/testscripts-cache:rw,z"])
+        cmd.extend(["--volume", f"{os.path.abspath(cache_dir)}:/home/pwuser/testscripts-cache:rw,z"])
+
+    # Headed mode: X11 forwarding for debug
+    if args.headed:
+        display = os.environ.get("DISPLAY", ":0")
+        xauthority = os.path.expanduser("~/.Xauthority")
+        cmd.extend([
+            "--userns=keep-id:uid=1001,gid=1001",
+            "--security-opt", "label=disable",
+            "--ipc=host",
+            "--volume", "/tmp/.X11-unix:/tmp/.X11-unix:ro",
+            "--env", f"DISPLAY={display}",
+        ])
+        if os.path.exists(xauthority):
+            cmd.extend([
+                "--volume", f"{xauthority}:/tmp/.Xauthority:ro",
+                "--env", "XAUTHORITY=/tmp/.Xauthority",
+            ])
 
     # Shell mode: replace entrypoint with bash
     if args.shell:
@@ -503,7 +581,8 @@ def extract_output_from_steps(subjson: dict, level: int = 0, prefix: str = "") -
         if index == 0:
             output += "\n__Errors " + prefix + "__"
         msg = error.get("message", "")
-        output += "\n" + sanitize_output(replace_emojis(msg).encode("utf-8")).rstrip()
+        sanitized = sanitize_output(replace_emojis(msg).encode("utf-8"))
+        output += "\n" + truncate_playwright_diff(sanitized).rstrip()
 
     return output, has_stderr
 
@@ -921,6 +1000,8 @@ def build_argument_parser() -> ArgumentParser:
                         help="Enable verbose logging")
     parser.add_argument("--shell", action="store_true", default=False,
                         help="Start container with bash instead of run.py")
+    parser.add_argument("--headed", action="store_true", default=False,
+                        help="Run browsers in headed mode with X11 forwarding (debug only)")
 
     # Report URL
     parser.add_argument("--report-url", dest="report_url", default=None,
@@ -989,6 +1070,15 @@ def main() -> int:
         return nagios_exit("UNKNOWN", containerenv.failure)
 
     # ---------------------------------------------------------------------------
+    # Headed mode pre-flight
+    # ---------------------------------------------------------------------------
+    if args.headed:
+        headed_error = validate_headed_mode()
+        if headed_error:
+            return nagios_exit("UNKNOWN", headed_error)
+        setup_x11_access()
+
+    # ---------------------------------------------------------------------------
     # Derive names and paths
     # ---------------------------------------------------------------------------
     hostname = args.host_name
@@ -1001,9 +1091,35 @@ def main() -> int:
     # ---------------------------------------------------------------------------
     # PID file concurrency check (T015)
     # ---------------------------------------------------------------------------
-    if args.result_dest == "local":
-        os.makedirs(result_dir, mode=PERM_WORLD_RWX, exist_ok=True)
-        os.chmod(result_dir, PERM_WORLD_RWX)
+    os.makedirs(result_dir, mode=PERM_WORLD_RWX, exist_ok=True)
+    os.chmod(result_dir, PERM_WORLD_RWX)
+    # Files and subdirs from previous runs are owned by the site user.
+    # The container's pwuser maps to a sub-uid of the site user and cannot
+    # overwrite them — chmod everything in the result tree open.
+    for dirpath, dirnames, filenames in os.walk(result_dir):
+        for d in dirnames:
+            try:
+                os.chmod(os.path.join(dirpath, d), PERM_WORLD_RWX)
+            except OSError:
+                pass
+        for f in filenames:
+            try:
+                os.chmod(os.path.join(dirpath, f), PERM_WORLD_RWX)
+            except OSError:
+                pass
+
+    # S3 testscripts cache needs the same world-writable treatment so the
+    # container's pwuser (mapped to a sub-uid) can create subdirs.
+    if args.test_source == "s3":
+        cache_dir = args.testscripts_cache
+        os.makedirs(cache_dir, mode=PERM_WORLD_RWX, exist_ok=True)
+        os.chmod(cache_dir, PERM_WORLD_RWX)
+        for dirpath, dirnames, filenames in os.walk(cache_dir):
+            for d in dirnames:
+                try:
+                    os.chmod(os.path.join(dirpath, d), PERM_WORLD_RWX)
+                except OSError:
+                    pass
 
     pid_file = os.path.join(result_dir, f"running_{testident}")
     existing_pid = check_pid_file(pid_file)
@@ -1071,12 +1187,8 @@ def main() -> int:
     container_output = ""
     has_stderr_in_steps = False
 
-    if args.result_dest == "local":
-        steps_json_path = os.path.join(result_dir, "steps.json")
-        steps_data = parse_steps_json(steps_json_path)
-    else:
-        # For S3 mode, steps.json is not on host — use stdout as container output
-        steps_data = None
+    steps_json_path = os.path.join(result_dir, "steps.json")
+    steps_data = parse_steps_json(steps_json_path)
 
     if steps_data is not None:
         perfdata.extend(extract_perfdata_from_steps(steps_data))
@@ -1143,14 +1255,13 @@ def main() -> int:
 
     # Read test-meta.json for timestamp (for report URL)
     test_meta = {}
-    if args.result_dest == "local":
-        meta_path = os.path.join(result_dir, "test-meta.json")
-        if os.path.exists(meta_path):
-            try:
-                with open(meta_path, "r") as f:
-                    test_meta = json.load(f)
-            except (json.JSONDecodeError, IOError):
-                pass
+    meta_path = os.path.join(result_dir, "test-meta.json")
+    if os.path.exists(meta_path):
+        try:
+            with open(meta_path, "r") as f:
+                test_meta = json.load(f)
+        except (json.JSONDecodeError, IOError):
+            pass
 
     # Build report annotation (T024)
     annotation = ""

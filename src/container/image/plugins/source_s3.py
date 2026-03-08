@@ -49,7 +49,7 @@ def acquire_tests(test_name: str, dest_path: str) -> None:
     # test_name is "hostname__servicedescription" (URL-safe)
     file_key = f"{test_name}/scripts.tgz"
 
-    cache_dir = "/testscripts-cache"
+    cache_dir = "/home/pwuser/testscripts-cache"
     cached_tgz = os.path.join(cache_dir, test_name, "scripts.tgz")
 
     download = True

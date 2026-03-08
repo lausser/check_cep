@@ -27,7 +27,7 @@ from conftest import run_check_cep
 
 def test_passing(test_env):
     """A Playwright test that finds the expected text returns OK (exit 0)."""
-    (test_env["tests_dir"] / "passing.test.ts").write_text("""\
+    (test_env["test_dir"] / "passing.test.ts").write_text("""\
 import { test, expect } from '@playwright/test';
 
 test('consol.de homepage has expected text', async ({ page }) => {
@@ -49,7 +49,7 @@ test('consol.de homepage has expected text', async ({ page }) => {
 
 def test_failing(test_env):
     """A Playwright assertion that never matches returns CRITICAL (exit 2)."""
-    (test_env["tests_dir"] / "failing.test.ts").write_text("""\
+    (test_env["test_dir"] / "failing.test.ts").write_text("""\
 import { test, expect } from '@playwright/test';
 
 test('homepage contains non-existent text', async ({ page }) => {
@@ -71,7 +71,7 @@ test('homepage contains non-existent text', async ({ page }) => {
 
 def test_timeout(test_env):
     """A test that hangs is killed by the container timeout -> CRITICAL 'timed out'."""
-    (test_env["tests_dir"] / "timeout.test.ts").write_text("""\
+    (test_env["test_dir"] / "timeout.test.ts").write_text("""\
 import { test } from '@playwright/test';
 
 test('test that never finishes', async ({ page }) => {
@@ -99,7 +99,7 @@ test('test that never finishes', async ({ page }) => {
 
 def test_syntax_error(test_env):
     """A .test.ts with invalid syntax causes Playwright to fail -> CRITICAL."""
-    (test_env["tests_dir"] / "broken.test.ts").write_text("""\
+    (test_env["test_dir"] / "broken.test.ts").write_text("""\
 import { test, expect } from '@playwright/test';
 
 // Deliberately unclosed arrow function — TypeScript parse error
@@ -125,7 +125,7 @@ test('broken syntax', async ({ page }) => {
 
 def test_custom_perfdata(test_env):
     """console.log('NagiosPerfData: ...') in the test appears in check_cep output."""
-    (test_env["tests_dir"] / "perfdata.test.ts").write_text("""\
+    (test_env["test_dir"] / "perfdata.test.ts").write_text("""\
 import { test, expect } from '@playwright/test';
 
 test('test with custom perfdata', async ({ page }) => {
@@ -154,7 +154,7 @@ test('test with custom perfdata', async ({ page }) => {
 
 def test_report_written(test_env):
     """After a run, the result directory contains all expected artefacts."""
-    (test_env["tests_dir"] / "report_check.test.ts").write_text("""\
+    (test_env["test_dir"] / "report_check.test.ts").write_text("""\
 import { test, expect } from '@playwright/test';
 
 test('consol.de homepage loads', async ({ page }) => {
