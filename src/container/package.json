@@ -2,6 +2,9 @@
   "name": "check-cep-container",
   "private": true,
   "dependencies": {
-    "@playwright/test": "^1.58.0"
+    "@playwright/test": "^1.58.0",
+    "check-cep-vision": "file:./check-cep-vision",
+    "opencv-wasm": "^4.3.0-10",
+    "pngjs": "^7.0.0"
   }
 }

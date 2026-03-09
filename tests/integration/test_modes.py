@@ -25,6 +25,11 @@ FIXTURES = [
     ("tc_fail",          2,    "CRITICAL -", [],                    None),
     ("tc_timeout",       2,    "CRITICAL -", ["--timeout", "15"],   "timed out"),
     ("tc_syntax",        None, None,         [],                    None),
+    ("tc_vision_basic",     0,    "OK -",       [],                    None),
+    ("tc_vision_ambiguous", 0,    "OK -",       [],                    None),
+    ("tc_vision_color",     0,    "OK -",       [],                    None),
+    ("tc_vision_debug",     0,    "OK -",       [],                    None),
+    ("tc_vision_workflow",  0,    "OK -",       [],                    None),
 ]
 
 
