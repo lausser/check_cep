@@ -23,7 +23,16 @@ def publish_results(test_name: str, results_path: str, nagios_state: int) -> Non
     the host owned by a sub-uid (e.g. 525287) that is not the calling user.
     Fix: "sudo chown -R root:root" maps to the host user's uid (root-in-container
     == host-user-on-host in rootless Podman), restoring readable ownership.
+
+    Exception: with --userns=keep-id (headed mode), pwuser inside already maps
+    to the host user, so chown to root would map to a subordinate uid instead.
     """
+    # With --userns=keep-id (headed/debug mode), pwuser IS the host user —
+    # chown to root would be wrong.  Detect via HEADED env var.
+    if os.environ.get("HEADED"):
+        logger.debug(f"Headed mode: skipping chown (keep-id maps pwuser to host user)")
+        return
+
     # Fix ownership so the host user can read/delete result files.
     # root inside a rootless Podman container == the host user outside it.
     try:

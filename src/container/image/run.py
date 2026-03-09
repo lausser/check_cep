@@ -149,6 +149,39 @@ def run_playwright(test_dir: str, results_path: str, timeout_sec: int,
     if headed:
         cmd += " --headed"
 
+    # The host may request extra Chromium CLI flags via PLAYWRIGHT_BROWSER_ARGS
+    # (e.g. Wayland display support).  Generate a thin config wrapper that
+    # merges these args into the user's existing playwright.config.
+    browser_args = os.environ.get("PLAYWRIGHT_BROWSER_ARGS", "")
+    if browser_args:
+        args_list = json.dumps(browser_args.split())
+        # Find user config to extend (if any)
+        user_config = ""
+        for name in ("playwright.config.ts", "playwright.config.js"):
+            if os.path.exists(os.path.join(test_dir, name)):
+                user_config = name
+                break
+        wrapper_path = os.path.join(results_path, "_headed_config.ts")
+        if user_config:
+            wrapper = (
+                f"import base from '{test_dir}/{user_config}';\n"
+                f"const extra = {args_list};\n"
+                f"const use = base.use || {{}};\n"
+                f"const lo = use.launchOptions || {{}};\n"
+                f"const args = [...(lo.args || []), ...extra];\n"
+                f"export default {{ ...base, testDir: '{test_dir}', "
+                f"use: {{ ...use, launchOptions: {{ ...lo, args }} }} }};\n"
+            )
+        else:
+            wrapper = (
+                f"export default {{ testDir: '{test_dir}', use: {{ "
+                f"launchOptions: {{ args: {args_list} }} }} }};\n"
+            )
+        with open(wrapper_path, "w") as f:
+            f.write(wrapper)
+        cmd += f" --config {wrapper_path}"
+        logger.debug(f"Injecting browser args via {wrapper_path}: {browser_args}")
+
     logger.debug(f"Running: {cmd} in {test_dir}")
     proc = subprocess.run(cmd, shell=True, capture_output=True, cwd=test_dir, env=env)
 

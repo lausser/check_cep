@@ -43,6 +43,10 @@ LOG_BACKUP_COUNT = 3
 DEFAULT_MEMORY_LIMIT = "2g"
 DEFAULT_CPU_COUNT = 2  # Hardcoded intentional (FR-006)
 
+# Container user — pwuser uid/gid in the Playwright base image
+CONTAINER_UID = 1001
+CONTAINER_GID = 1001
+
 # Cgroup v2 resource monitoring
 CGROUP_POLL_INTERVAL_SEC = 0.250  # 4 samples/sec
 CGROUP_BASE_PATH = "/sys/fs/cgroup"
@@ -270,29 +274,46 @@ def container_cleanup(container_bin: str, container_name: str) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Headed mode (X11 forwarding for debug)
+# Headed mode (display forwarding for debug)
 # ---------------------------------------------------------------------------
+
+def detect_display_server() -> str:
+    """Detect whether the session uses Wayland or X11.
+
+    Returns 'wayland' if WAYLAND_DISPLAY is set and the socket exists,
+    'x11' if DISPLAY is set and the X11 socket exists, or '' if neither.
+    """
+    wayland_display = os.environ.get("WAYLAND_DISPLAY", "")
+    xdg_runtime = os.environ.get("XDG_RUNTIME_DIR", "")
+    if wayland_display and xdg_runtime:
+        socket_path = os.path.join(xdg_runtime, wayland_display)
+        if os.path.exists(socket_path):
+            return "wayland"
+
+    display = os.environ.get("DISPLAY", "")
+    if display:
+        match = re.match(r":(\d+)", display)
+        if match:
+            socket_path = f"/tmp/.X11-unix/X{match.group(1)}"
+            if os.path.exists(socket_path):
+                return "x11"
+
+    return ""
+
 
 def validate_headed_mode() -> Optional[str]:
     """Pre-flight checks for --headed mode.
 
     Returns error message string or None if everything is OK.
     """
-    display = os.environ.get("DISPLAY")
-    if not display:
-        return "--headed requires DISPLAY to be set"
-
-    # Extract display number from e.g. ":0" or ":1.0"
-    match = re.match(r":(\d+)", display)
-    if match:
-        socket_path = f"/tmp/.X11-unix/X{match.group(1)}"
-        if not os.path.exists(socket_path):
-            return f"--headed: X11 socket {socket_path} not found"
-
-    if not shutil.which("xhost"):
-        return "--headed requires xhost to be installed"
-
-    return None
+    server = detect_display_server()
+    if server == "wayland":
+        return None
+    if server == "x11":
+        if not shutil.which("xhost"):
+            return "--headed requires xhost to be installed (X11 mode)"
+        return None
+    return "--headed requires WAYLAND_DISPLAY or DISPLAY to be set"
 
 
 def setup_x11_access() -> None:
@@ -400,22 +421,36 @@ def build_podman_command(container_bin: str, container_name: str, args, env_vars
         cache_dir = args.testscripts_cache
         cmd.extend(["--volume", f"{os.path.abspath(cache_dir)}:/home/pwuser/testscripts-cache:rw,z"])
 
-    # Headed mode: X11 forwarding for debug
+    # Headed mode: display forwarding for debug
     if args.headed:
-        display = os.environ.get("DISPLAY", ":0")
-        xauthority = os.path.expanduser("~/.Xauthority")
         cmd.extend([
-            "--userns=keep-id:uid=1001,gid=1001",
+            f"--userns=keep-id:uid={CONTAINER_UID},gid={CONTAINER_GID}",
             "--security-opt", "label=disable",
             "--ipc=host",
-            "--volume", "/tmp/.X11-unix:/tmp/.X11-unix:ro",
-            "--env", f"DISPLAY={display}",
         ])
-        if os.path.exists(xauthority):
+        if detect_display_server() == "wayland":
+            wayland_display = os.environ["WAYLAND_DISPLAY"]
+            xdg_runtime = os.environ["XDG_RUNTIME_DIR"]
+            host_socket = os.path.join(xdg_runtime, wayland_display)
+            container_runtime = f"/run/user/{CONTAINER_UID}"
             cmd.extend([
-                "--volume", f"{xauthority}:/tmp/.Xauthority:ro",
-                "--env", "XAUTHORITY=/tmp/.Xauthority",
+                "--volume", f"{host_socket}:{container_runtime}/{wayland_display}:ro",
+                "--env", f"WAYLAND_DISPLAY={wayland_display}",
+                "--env", f"XDG_RUNTIME_DIR={container_runtime}",
+                "--env", "PLAYWRIGHT_BROWSER_ARGS=--enable-features=UseOzonePlatform --ozone-platform=wayland",
             ])
+        else:
+            display = os.environ.get("DISPLAY", ":0")
+            xauthority = os.path.expanduser("~/.Xauthority")
+            cmd.extend([
+                "--volume", "/tmp/.X11-unix:/tmp/.X11-unix:ro",
+                "--env", f"DISPLAY={display}",
+            ])
+            if os.path.exists(xauthority):
+                cmd.extend([
+                    "--volume", f"{xauthority}:/tmp/.Xauthority:ro",
+                    "--env", "XAUTHORITY=/tmp/.Xauthority",
+                ])
 
     # Shell mode: replace entrypoint with bash
     if args.shell:
@@ -1001,7 +1036,7 @@ def build_argument_parser() -> ArgumentParser:
     parser.add_argument("--shell", action="store_true", default=False,
                         help="Start container with bash instead of run.py")
     parser.add_argument("--headed", action="store_true", default=False,
-                        help="Run browsers in headed mode with X11 forwarding (debug only)")
+                        help="Run browsers in headed mode (Wayland/X11 auto-detected, debug only)")
 
     # Report URL
     parser.add_argument("--report-url", dest="report_url", default=None,
@@ -1076,7 +1111,8 @@ def main() -> int:
         headed_error = validate_headed_mode()
         if headed_error:
             return nagios_exit("UNKNOWN", headed_error)
-        setup_x11_access()
+        if detect_display_server() == "x11":
+            setup_x11_access()
 
     # ---------------------------------------------------------------------------
     # Derive names and paths
