@@ -387,26 +387,24 @@ cd ~/tests
 npx playwright test --reporter=line
 ```
 
-## 8. Headed Mode — Debug with a Real Browser on Your Desktop
+## 8. Headed Mode — Watch Tests Live on Your Desktop
 
 When a test fails and the HTML report doesn't tell the whole story, you can watch
 Playwright drive a real browser window on your desktop. The `--headed` flag
-forwards the container's X11 connection to your host display.
+forwards the display connection from the container to your host.
 
 ### Prerequisites
 
-- A **Linux desktop session** (KDE Plasma, GNOME, Xfce, etc.) — Wayland desktops
-  work fine because XWayland provides an X11 server automatically
-- `xhost` installed (usually part of `xorg-x11-server-utils` or `xhost`)
-- `DISPLAY` environment variable set (happens automatically in desktop terminals)
+- A **Linux desktop session** (KDE Plasma, GNOME, Xfce, etc.)
+- **Wayland** (modern default on Fedora, Ubuntu 22.04+, KDE 6): works out of the
+  box — `check_cep` auto-detects `WAYLAND_DISPLAY` and mounts the Wayland socket
+- **X11**: needs `xhost` installed (usually part of `xorg-x11-server-utils` or
+  `x11-xserver-utils`) and the `DISPLAY` variable set
 
-> **Why X11 and not native Wayland?** Chrome/Chromium on Linux still uses X11
-> under the hood (even on Wayland, it connects via XWayland). X11 socket
-> forwarding into containers is simple and proven. Native Wayland forwarding
-> requires complex `XDG_RUNTIME_DIR` sharing and a wayland-proxy — not worth
-> the complexity for a debug tool.
+`check_cep` auto-detects which display server is active and configures the
+container accordingly. Wayland is preferred when both are available.
 
-### Quick Start
+### Watch a Test Run
 
 ```bash
 python3 src/check_cep \
@@ -426,12 +424,26 @@ A Chromium window opens on your desktop, navigates to the target site, and you
 can watch every click and assertion happen in real time. When the test finishes,
 the window closes and `check_cep` produces its normal Nagios output.
 
-### Combine with `--shell` for Interactive Debugging
+> **Tip**: If your test runs too fast to follow, add `slowMo` to your
+> `playwright.config.ts` to insert a delay between each Playwright action:
+>
+> ```typescript
+> export default defineConfig({
+>   use: {
+>     launchOptions: {
+>       slowMo: 500,   // 500ms pause between each action
+>     },
+>   },
+> });
+> ```
 
-The most powerful debug workflow: `--headed --shell` drops you into the container
-with X11 forwarding already configured. You can then run Playwright manually,
-re-run individual tests, or experiment with selectors — all with a visible
-browser.
+### Interactive Test Development with `--headed --shell`
+
+The most powerful debug workflow: `--headed --shell` drops you into a bash shell
+inside the container with the display connection already configured. Your test
+directory is mounted at `~/tests` and a visible browser is available. This lets
+you run tests manually, re-run individual tests, tweak selectors, and use the
+Playwright UI tools — all while watching what happens in the browser.
 
 ```bash
 python3 src/check_cep \
@@ -444,52 +456,101 @@ python3 src/check_cep \
   --result-dest local \
   --test-dir /tmp/my-first-test \
   --result-dir /tmp/my-first-results \
-  --timeout 60
+  --timeout 300
 ```
 
-Inside the container:
+Once inside the container shell:
 
 ```bash
+# Run all tests with a visible browser
 cd ~/tests
-npx playwright test --headed --reporter=line     # run all tests with visible browser
-npx playwright test --headed -g "has title"       # run a single test by name
-npx playwright test --headed --debug              # Playwright Inspector (step-through)
+npx playwright test --headed --reporter=line
+
+# Run a single test by name
+npx playwright test --headed -g "has title"
+
+# Step-through debugging with Playwright Inspector
+# (opens a second window with pause/resume/step controls)
+npx playwright test --headed --debug
+
+# Open the Playwright Test Generator (codegen)
+# Records your clicks and generates test code automatically
+npx playwright codegen https://www.example.com
 ```
 
-### What `--headed` Does Under the Hood
+The **Playwright Test Generator** (`codegen`) is especially useful for writing
+new tests: it opens a browser and a code panel side by side. As you click
+through the website, it records your actions as Playwright test code that you
+can copy into a `.test.ts` file.
 
-`check_cep` adds several Podman flags that are **only** active in headed mode:
+### How It Works
 
-| Podman flag | Purpose |
-|-------------|---------|
-| `--userns=keep-id:uid=1001,gid=1001` | Maps your host UID to `pwuser` (UID 1001) inside the container, so the container process can read the X11 socket |
-| `--security-opt label=disable` | Disables SELinux labeling — the X11 socket cannot use `:z` relabeling since it's shared with the host |
-| `--ipc=host` | Shares the host's IPC namespace — Chrome requires the MIT-SHM X extension and crashes without it |
-| `--volume /tmp/.X11-unix:/tmp/.X11-unix:ro` | Mounts the X11 unix socket (no `:z` — relabeling a shared host socket would break other X11 clients) |
+`check_cep` auto-detects the display server and configures the container:
+
+**Wayland sessions** (modern default):
+
+| Container setting | Purpose |
+|-------------------|---------|
+| `--volume $XDG_RUNTIME_DIR/wayland-0:…:ro` | Mounts the Wayland compositor socket into the container |
+| `--env WAYLAND_DISPLAY=wayland-0` | Tells Chromium where to find the Wayland socket |
+| `--env XDG_RUNTIME_DIR=/run/user/1001` | Points to the mounted socket directory |
+| `--env PLAYWRIGHT_BROWSER_ARGS=…` | Injects `--enable-features=UseOzonePlatform --ozone-platform=wayland` so Chromium uses native Wayland rendering |
+
+**X11 sessions** (fallback):
+
+| Container setting | Purpose |
+|-------------------|---------|
+| `--volume /tmp/.X11-unix:/tmp/.X11-unix:ro` | Mounts the X11 unix socket |
 | `--env DISPLAY=$DISPLAY` | Tells the browser which X display to connect to |
-| `--volume ~/.Xauthority:/tmp/.Xauthority:ro` | X11 authentication cookie (only if the file exists) |
+| `--volume ~/.Xauthority:/tmp/.Xauthority:ro` | X11 authentication cookie (if the file exists) |
 
-Before starting the container, `check_cep` also runs `xhost +local:` to allow
-local connections to the X display.
+Both modes also add:
+
+| Container setting | Purpose |
+|-------------------|---------|
+| `--userns=keep-id:uid=1001,gid=1001` | Maps your host UID to `pwuser` inside the container, so the process can access the display socket |
+| `--security-opt label=disable` | Disables SELinux labeling — the display socket cannot use `:z` relabeling since it's shared with the host |
+| `--ipc=host` | Shares the host IPC namespace — Chromium uses MIT-SHM for fast rendering |
+
+> **Note on Chromium vs Chrome**: The browser you see is **Chromium** (blue icon),
+> not Google Chrome (multicolor icon). Playwright bundles its own Chromium build —
+> it does not use your system browser. This is by design and ensures consistent
+> test behavior.
+
+### Browser Args Injection
+
+When `PLAYWRIGHT_BROWSER_ARGS` is set by the host (e.g. with the Wayland Ozone
+flags), the container generates a thin config wrapper (`_headed_config.ts` in the
+results directory) that extends the user's `playwright.config.ts` and appends the
+extra Chromium launch arguments. This means your test configs do not need any
+display-specific flags — the container handles it transparently.
+
+### File Ownership in Headed Mode
+
+In headed mode, `--userns=keep-id` maps your host UID directly to `pwuser`
+inside the container. Files written by `pwuser` already appear on the host with
+your ownership — no `chown` needed. This differs from normal (headless) mode
+where `chown root:root` inside the container transfers ownership to the host
+user (see [File Ownership](#5-file-ownership-in-local-mode)).
 
 ### Error Messages
 
-If the environment doesn't support headed mode, `check_cep` exits UNKNOWN with
-a clear message:
+If the environment doesn't support headed mode, `check_cep` exits UNKNOWN:
 
 | Message | Fix |
 |---------|-----|
-| `--headed requires DISPLAY to be set` | Run from a desktop terminal, not an SSH session |
+| `--headed requires WAYLAND_DISPLAY or DISPLAY to be set` | Run from a desktop terminal, not an SSH session |
 | `--headed: X11 socket /tmp/.X11-unix/X0 not found` | Your X server isn't running; log in to a graphical desktop |
-| `--headed requires xhost to be installed` | Install `xorg-x11-server-utils` (Fedora) or `x11-xserver-utils` (Debian) |
+| `--headed requires xhost to be installed (X11 mode)` | Install `xorg-x11-server-utils` (Fedora) or `x11-xserver-utils` (Debian) |
 
 ### When to Use Headed Mode (and When Not To)
 
 **Good uses:**
 - Debugging a flaky test — watch what happens visually
-- Writing a new test — iterate with `--headed --shell` and a visible browser
-- Investigating timing issues — see if the page actually loaded before the assertion ran
-- Using Playwright Inspector (`--debug`) for step-through debugging
+- Writing a new test — iterate with `--headed --shell` and `playwright codegen`
+- Investigating timing issues — see if the page loaded before the assertion ran
+- Step-through debugging with Playwright Inspector (`--debug`)
+- Cookie consent banners and popups — see what's blocking your selectors
 
 **Not appropriate for:**
 - Production monitoring (headless is the default for a reason)
@@ -556,7 +617,7 @@ and writes results to `$OMD_ROOT/var/tmp/check_cep/webserver01/E2E_Login_Check/`
 | `--memory-limit` | `2g` | Container memory limit |
 | `--debug` | off | Verbose logging |
 | `--shell` | off | Interactive bash shell |
-| `--headed` | off | X11-forwarded headed browser (debug only) |
+| `--headed` | off | Headed browser on your desktop (Wayland/X11 auto-detected, debug only) |
 
 ### Performance Data
 
