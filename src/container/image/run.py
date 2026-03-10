@@ -149,12 +149,13 @@ def run_playwright(test_dir: str, results_path: str, timeout_sec: int,
     if headed:
         cmd += " --headed"
 
-    # The host may request extra Chromium CLI flags via PLAYWRIGHT_BROWSER_ARGS
-    # (e.g. Wayland display support).  Generate a thin config wrapper that
-    # merges these args into the user's existing playwright.config.
+    # Generate a config wrapper when the runtime needs to inject launch options
+    # (extra Chromium flags for Wayland, slowMo for spectate mode, etc.).
     browser_args = os.environ.get("PLAYWRIGHT_BROWSER_ARGS", "")
-    if browser_args:
-        args_list = json.dumps(browser_args.split())
+    slow_mo = os.environ.get("CEP_SLOW_MO", "")
+    if browser_args or slow_mo:
+        args_line = f"const extra = {json.dumps(browser_args.split())};\n" if browser_args else "const extra = [];\n"
+        slow_mo_line = f"const slowMo = {int(slow_mo)};\n" if slow_mo else "const slowMo = 0;\n"
         # Find user config to extend (if any)
         user_config = ""
         for name in ("playwright.config.ts", "playwright.config.js"):
@@ -165,22 +166,32 @@ def run_playwright(test_dir: str, results_path: str, timeout_sec: int,
         if user_config:
             wrapper = (
                 f"import base from '{test_dir}/{user_config}';\n"
-                f"const extra = {args_list};\n"
+                + args_line + slow_mo_line +
                 f"const use = base.use || {{}};\n"
                 f"const lo = use.launchOptions || {{}};\n"
                 f"const args = [...(lo.args || []), ...extra];\n"
-                f"export default {{ ...base, testDir: '{test_dir}', "
-                f"use: {{ ...use, launchOptions: {{ ...lo, args }} }} }};\n"
+                f"const opts = {{ ...lo, args }};\n"
+                f"if (slowMo) opts.slowMo = slowMo;\n"
+                # Bump expect/action timeouts so slow-motion doesn't starve assertions
+                f"const expectTimeout = slowMo ? {{ timeout: 30000 }} : (base.expect || {{}});\n"
+                f"const actionTimeout = slowMo ? 30000 : (use.actionTimeout || 0);\n"
+                f"export default {{ ...base, testDir: '{test_dir}', expect: expectTimeout, "
+                f"use: {{ ...use, actionTimeout: actionTimeout || undefined, launchOptions: opts }} }};\n"
             )
         else:
             wrapper = (
-                f"export default {{ testDir: '{test_dir}', use: {{ "
-                f"launchOptions: {{ args: {args_list} }} }} }};\n"
+                args_line + slow_mo_line +
+                f"const opts = {{ args: extra }};\n"
+                f"if (slowMo) opts.slowMo = slowMo;\n"
+                f"const expectTimeout = slowMo ? {{ timeout: 30000 }} : {{}};\n"
+                f"const actionTimeout = slowMo ? 30000 : undefined;\n"
+                f"export default {{ testDir: '{test_dir}', expect: expectTimeout, use: {{ "
+                f"actionTimeout, launchOptions: opts }} }};\n"
             )
         with open(wrapper_path, "w") as f:
             f.write(wrapper)
         cmd += f" --config {wrapper_path}"
-        logger.debug(f"Injecting browser args via {wrapper_path}: {browser_args}")
+        logger.debug(f"Config wrapper {wrapper_path}: browser_args={browser_args} slowMo={slow_mo}")
 
     logger.debug(f"Running: {cmd} in {test_dir}")
     proc = subprocess.run(cmd, shell=True, capture_output=True, cwd=test_dir, env=env)

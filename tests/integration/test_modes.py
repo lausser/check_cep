@@ -30,6 +30,9 @@ FIXTURES = [
     ("tc_vision_color",     0,    "OK -",       [],                    None),
     ("tc_vision_debug",     0,    "OK -",       [],                    None),
     ("tc_vision_workflow",  0,    "OK -",       [],                    None),
+    ("tc_vision_example_form", 0,  "OK -",       [],                    None),
+    ("tc_vision_example_console", 0, "OK -",    [],                    None),
+    ("tc_vision_example_login", 0,   "OK -",    [],                    None),
 ]
 
 

@@ -281,7 +281,13 @@ def detect_display_server() -> str:
     """Detect whether the session uses Wayland or X11.
 
     Returns 'wayland' if WAYLAND_DISPLAY is set and the socket exists,
-    'x11' if DISPLAY is set and the X11 socket exists, or '' if neither.
+    'x11' if DISPLAY is set and reachable, or '' if neither.
+
+    X11 DISPLAY formats:
+      :0          — local display (Unix socket /tmp/.X11-unix/X0)
+      :10.0       — local display with screen number
+      localhost:10.0 — SSH-forwarded (TCP, no local socket)
+      hostname:0  — remote display (TCP)
     """
     wayland_display = os.environ.get("WAYLAND_DISPLAY", "")
     xdg_runtime = os.environ.get("XDG_RUNTIME_DIR", "")
@@ -292,13 +298,26 @@ def detect_display_server() -> str:
 
     display = os.environ.get("DISPLAY", "")
     if display:
-        match = re.match(r":(\d+)", display)
+        # Extract display number from :N or hostname:N (optional .screen suffix)
+        match = re.match(r"(?:.*?)?:(\d+)", display)
         if match:
-            socket_path = f"/tmp/.X11-unix/X{match.group(1)}"
+            display_num = match.group(1)
+            socket_path = f"/tmp/.X11-unix/X{display_num}"
             if os.path.exists(socket_path):
+                # Local Unix socket (e.g. :0, :1)
+                return "x11"
+            if ":" in display and not display.startswith(":"):
+                # Remote/SSH-forwarded display (e.g. localhost:10.0) — no
+                # local socket expected; SSH handles the TCP forwarding.
                 return "x11"
 
     return ""
+
+
+def is_local_x11() -> bool:
+    """True when DISPLAY points to a local Unix socket (e.g. :0), not SSH/TCP."""
+    display = os.environ.get("DISPLAY", "")
+    return display.startswith(":")
 
 
 def validate_headed_mode() -> Optional[str]:
@@ -310,16 +329,23 @@ def validate_headed_mode() -> Optional[str]:
     if server == "wayland":
         return None
     if server == "x11":
-        if not shutil.which("xhost"):
+        # xhost is only needed for local Unix-socket displays.
+        # SSH-forwarded displays (localhost:10.0) use .Xauthority instead.
+        if is_local_x11() and not shutil.which("xhost"):
             return "--headed requires xhost to be installed (X11 mode)"
         return None
     return "--headed requires WAYLAND_DISPLAY or DISPLAY to be set"
 
 
 def setup_x11_access() -> None:
-    """Run xhost +local: to allow container X11 connections."""
-    subprocess.run(["xhost", "+local:"],
-                   stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    """Run xhost +local: to allow container X11 connections.
+
+    Only relevant for local Unix-socket displays.  SSH-forwarded displays
+    use .Xauthority for authentication, so xhost is not needed.
+    """
+    if is_local_x11() and shutil.which("xhost"):
+        subprocess.run(["xhost", "+local:"],
+                       stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
 
 # ---------------------------------------------------------------------------
@@ -346,6 +372,12 @@ def build_env_vars(args) -> Dict[str, str]:
 
     if args.headed:
         env["HEADED"] = "1"
+
+    # Spectate mode: pass through slow-motion and highlight timing
+    for passthrough in ("CEP_VISION_HIGHLIGHT_MS", "CEP_SLOW_MO"):
+        val = os.environ.get(passthrough)
+        if val:
+            env[passthrough] = val
 
     # S3 credentials (when S3 plugins active)
     if args.s3_endpoint:
@@ -442,10 +474,20 @@ def build_podman_command(container_bin: str, container_name: str, args, env_vars
         else:
             display = os.environ.get("DISPLAY", ":0")
             xauthority = os.path.expanduser("~/.Xauthority")
-            cmd.extend([
-                "--volume", "/tmp/.X11-unix:/tmp/.X11-unix:ro",
-                "--env", f"DISPLAY={display}",
-            ])
+            if display.startswith(":"):
+                # Local X11 — forward via Unix socket
+                cmd.extend([
+                    "--volume", "/tmp/.X11-unix:/tmp/.X11-unix:ro",
+                    "--env", f"DISPLAY={display}",
+                ])
+            else:
+                # Remote/SSH-forwarded X11 (e.g. localhost:10.0) — the
+                # display is TCP-based.  Use host networking so the
+                # container can reach the SSH-forwarded port on loopback.
+                cmd.extend([
+                    "--network=host",
+                    "--env", f"DISPLAY={display}",
+                ])
             if os.path.exists(xauthority):
                 cmd.extend([
                     "--volume", f"{xauthority}:/tmp/.Xauthority:ro",

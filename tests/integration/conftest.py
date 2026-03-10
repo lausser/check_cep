@@ -26,6 +26,13 @@ CEP_IMAGE = os.environ.get("CEP_IMAGE", "check_cep:test")
 CEP_PLUGIN = Path(__file__).parent.parent.parent / "src" / "check_cep"
 _FIXTURES_DIR = Path(__file__).parent.parent / "fixtures"
 
+# Spectate mode: run browsers headed so a human can watch the tests.
+# Set CEP_SPECTATE=1 to enable.  Injects --headed, slower highlight
+# timings, and Playwright slowMo so the spectator's eyes can follow.
+_SPECTATE = bool(os.environ.get("CEP_SPECTATE", ""))
+_SPECTATE_HIGHLIGHT_MS = os.environ.get("CEP_VISION_HIGHLIGHT_MS", "2000")
+_SPECTATE_SLOW_MO = os.environ.get("CEP_SLOW_MO", "400")
+
 # ---------------------------------------------------------------------------
 # Import derive_testident directly from src/check_cep (single source of truth)
 # ---------------------------------------------------------------------------
@@ -116,6 +123,9 @@ def run_check_cep(test_dir, result_dir, extra_args=None, env=None, proc_timeout=
     proc_timeout is the Python subprocess timeout (should exceed check_cep's
     own --timeout to avoid a race).
     env, if given, is merged on top of the current os.environ.
+
+    When CEP_SPECTATE is set, --headed and slow-motion env vars are injected
+    automatically so the spectator can watch the browser on their desktop.
     """
     cmd = [
         "python3", str(CEP_PLUGIN),
@@ -135,6 +145,19 @@ def run_check_cep(test_dir, result_dir, extra_args=None, env=None, proc_timeout=
     if env:
         merged_env.update(env)
 
+    if _SPECTATE:
+        # Inject --headed unless already present
+        if "--headed" not in cmd:
+            cmd.append("--headed")
+        # Bump the container-side Playwright timeout (slowMo + highlights add up)
+        if "--timeout" not in cmd:
+            cmd.extend(["--timeout", "300"])
+        # Slow-motion defaults (overridable via explicit env vars)
+        merged_env.setdefault("CEP_VISION_HIGHLIGHT_MS", _SPECTATE_HIGHLIGHT_MS)
+        merged_env.setdefault("CEP_SLOW_MO", _SPECTATE_SLOW_MO)
+        # More generous proc_timeout — headed + slowMo adds significant time
+        proc_timeout = max(proc_timeout, 600)
+
     proc = subprocess.run(
         cmd,
         capture_output=True,
@@ -151,11 +174,16 @@ def local_test_dir(tmp_path, fixture_name, write_playwright_config):
 
     Returns the Path of the directory containing the files — this is the
     value to pass as test_dir to run_check_cep().
+
+    If the fixture already ships a committed playwright.config.ts, it is
+    preserved (self-contained example fixtures).  Otherwise the shared
+    config is written so flat fixtures from earlier specs keep working.
     """
     dest = tmp_path / "tests" / fixture_name
     src_dir = _FIXTURES_DIR / fixture_name
     shutil.copytree(src_dir, dest)
-    write_playwright_config(dest)
+    if not (dest / "playwright.config.ts").exists():
+        write_playwright_config(dest)
     return dest
 
 
@@ -164,8 +192,14 @@ def run_check_cep_s3(fixture_name, omd_env, tmp_path, cep_image, s3_client,
                      cleanup_paths=None):
     """Run check_cep in S3 mode against the MinIO compose service.
 
-    Uploads a flat scripts.tgz to cep-tests/{testident}/scripts.tgz,
+    Uploads scripts.tgz to cep-tests/{testident}/scripts.tgz,
     then invokes check_cep with --test-source s3 --result-dest s3.
+
+    The full fixture directory tree is staged (copytree) so that example
+    fixtures with assets/, pages/, functions/, variables/ subdirectories
+    are packaged correctly.  If the fixture ships its own
+    playwright.config.ts it is preserved; otherwise the shared config is
+    written into the staging root.
 
     If cleanup_paths (list) is passed, dirs with container-owned files are
     appended so the container_cleanup fixture can remove them at teardown.
@@ -177,12 +211,12 @@ def run_check_cep_s3(fixture_name, omd_env, tmp_path, cep_image, s3_client,
     service = f"{fixture_name}-{short}"
     testident = derive_testident(hostname, service)
 
-    # Stage: copy .test.ts + write playwright.config.ts into a temp staging dir
+    # Stage: copy the entire fixture tree into a temp staging dir
     stage = tmp_path / "stage" / fixture_name
-    stage.mkdir(parents=True, exist_ok=True)
-    src_ts = _FIXTURES_DIR / fixture_name / f"{fixture_name}.test.ts"
-    shutil.copy(src_ts, stage / f"{fixture_name}.test.ts")
-    write_playwright_config(stage)
+    src_dir = _FIXTURES_DIR / fixture_name
+    shutil.copytree(src_dir, stage)
+    if not (stage / "playwright.config.ts").exists():
+        write_playwright_config(stage)
 
     # Pack as flat scripts.tgz (no leading directory)
     tgz_path = tmp_path / "scripts.tgz"

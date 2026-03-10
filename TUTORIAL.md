@@ -557,6 +557,11 @@ If the environment doesn't support headed mode, `check_cep` exits UNKNOWN:
 - CI pipelines (no display)
 - Automated test runs (adds overhead and requires a desktop session)
 
+> **Next step — writing your own tests**: For advanced test authoring
+> including the `check-cep-vision` API, persistent template images,
+> regions, click offsets, and choosing between DOM and vision selectors,
+> see [WRITING-TESTS.md](WRITING-TESTS.md).
+
 ## 9. OMD Integration
 
 In a production OMD environment, the default paths are:
@@ -749,6 +754,38 @@ pytest tests/integration/test_modes.py -v
 pytest "tests/integration/test_modes.py::test_local[tc_fail]" -v
 SKIP_INTEGRATION=1 pytest tests/integration/test_modes.py -k local -v
 ```
+
+### Spectate Mode — Watch the Tests Live on Screen
+
+Set `CEP_SPECTATE=1` to run the integration tests with visible browsers
+on your desktop.  Every Playwright action is slowed down, and vision
+highlight boxes linger so you can follow what is happening.
+
+This requires a working X11 or Wayland display — either a local desktop
+session or SSH with X11 forwarding (`ssh -X`).
+
+```bash
+# The nicest show — just the vision tests
+CEP_SPECTATE=1 pytest tests/integration/test_modes.py -k "tc_vision and local" -v
+
+# All local tests
+CEP_SPECTATE=1 pytest tests/integration/test_modes.py -k local -v
+```
+
+You can tune the speed with environment variables:
+
+```bash
+# Slower — more time to watch each step
+CEP_SLOW_MO=800 CEP_VISION_HIGHLIGHT_MS=3000 CEP_SPECTATE=1 pytest tests/integration/test_modes.py -k "tc_vision and local" -v
+
+# Faster — just a quick glance
+CEP_SLOW_MO=200 CEP_VISION_HIGHLIGHT_MS=1000 CEP_SPECTATE=1 pytest tests/integration/test_modes.py -k "tc_vision and local" -v
+```
+
+| Variable | Default (spectate) | Effect |
+|----------|-------------------|--------|
+| `CEP_SLOW_MO` | 400 | Milliseconds Playwright pauses between each action |
+| `CEP_VISION_HIGHLIGHT_MS` | 2000 | How long the vision highlight box stays visible |
 
 ### Test Structure
 

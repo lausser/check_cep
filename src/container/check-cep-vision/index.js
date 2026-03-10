@@ -11,6 +11,22 @@ const DEFAULT_SCALES = [0.97, 1.0, 1.03];
 const DEFAULT_SCORE_WEIGHTS = { gray: 0.45, color: 0.55 };
 const DEFAULT_CANDIDATE_BUFFER_MULTIPLIER = 12;
 
+/**
+ * Parse the optional highlight duration from environment configuration.
+ *
+ * The helper accepts a string because environment variables are string-based.
+ * Invalid values are ignored so the runtime falls back to the built-in default.
+ */
+function parseHighlightMs(value) {
+  if (value === undefined || value === null || value === '') {
+    return null;
+  }
+  const parsed = Number.parseInt(String(value), 10);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+const ENV_HIGHLIGHT_MS = parseHighlightMs(process.env.CEP_VISION_HIGHLIGHT_MS);
+
 const TERMINAL_REASONS = new Set([
   'invalid-size',
   'invalid-template',
@@ -20,17 +36,31 @@ const TERMINAL_REASONS = new Set([
   'unreadable-template',
 ]);
 
+/**
+ * Decode a PNG file into a plain RGBA buffer shape that can be consumed both by
+ * OpenCV and by the debug-artefact drawing helpers.
+ */
 function decodePng(buffer) {
   const png = PNG.sync.read(buffer);
   return { width: png.width, height: png.height, data: Buffer.from(png.data) };
 }
 
+/**
+ * Encode an RGBA buffer back to PNG. This is used for annotated debug images
+ * after the match rectangle has been drawn onto the searched screenshot.
+ */
 function encodePng(image) {
   const png = new PNG({ width: image.width, height: image.height });
   png.data = Buffer.from(image.data);
   return PNG.sync.write(png);
 }
 
+/**
+ * Convert an RGBA image into a grayscale OpenCV matrix.
+ *
+ * Grayscale is used only for the fast candidate-generation phase. Final
+ * verification still uses color-aware scoring later in the pipeline.
+ */
 function toGrayMat(image) {
   const rgba = cv.matFromImageData({
     data: new Uint8ClampedArray(image.data.buffer, image.data.byteOffset, image.data.byteLength),
@@ -43,10 +73,19 @@ function toGrayMat(image) {
   return gray;
 }
 
+/**
+ * Normalize a scale value so it can be used as a stable cache key.
+ */
 function scaleKey(scale) {
   return Number(scale).toFixed(4);
 }
 
+/**
+ * Resize a template image with a lightweight nearest-neighbor pass.
+ *
+ * The vision helper only supports a very small scale band, so a simple resizer
+ * is enough and avoids pulling in a heavier image-processing dependency.
+ */
 function scaleImageNearest(image, scale) {
   if (scale === 1) {
     return image;
@@ -69,6 +108,10 @@ function scaleImageNearest(image, scale) {
   return { width, height, data };
 }
 
+/**
+ * Count opaque pixels so obviously invalid templates (for example fully
+ * transparent images) can be rejected early with a clear error message.
+ */
 function countOpaquePixels(image) {
   let opaquePixels = 0;
   for (let index = 3; index < image.data.length; index += 4) {
@@ -79,6 +122,12 @@ function countOpaquePixels(image) {
   return opaquePixels;
 }
 
+/**
+ * Build a cache of scaled template variants used by the bounded scale search.
+ *
+ * This keeps the wait loop efficient because templates are read, validated, and
+ * scaled once instead of on every polling iteration.
+ */
 function buildScaledTemplateCache(template, scales) {
   const cache = new Map();
   const allScales = new Set([1, ...scales]);
@@ -92,6 +141,12 @@ function buildScaledTemplateCache(template, scales) {
   return cache;
 }
 
+/**
+ * Compute overlap between two candidate rectangles.
+ *
+ * The smaller area is used as denominator so a subset candidate counts as a
+ * strong overlap and can be deduplicated aggressively.
+ */
 function overlapRatio(a, b) {
   const x1 = Math.max(a.x, b.x);
   const y1 = Math.max(a.y, b.y);
@@ -131,6 +186,10 @@ function insertCandidateByScore(buffer, candidate, maxEntries) {
   }
 }
 
+/**
+ * Remove heavily overlapping candidates while preserving descending score
+ * order. This keeps only a small set of genuinely different match positions.
+ */
 function dedupeCandidates(candidates, limit, overlapThreshold) {
   const selected = [];
   for (const candidate of candidates) {
@@ -145,6 +204,10 @@ function dedupeCandidates(candidates, limit, overlapThreshold) {
   return selected;
 }
 
+/**
+ * Collect the strongest candidate coordinates from the raw OpenCV result
+ * matrix without sorting the entire matrix output.
+ */
 function collectTopCandidates(resultMat, width, height, scale, limit) {
   const raw = resultMat.data32F || resultMat.data64F || resultMat.data;
   const candidateBuffer = [];
@@ -161,6 +224,12 @@ function collectTopCandidates(resultMat, width, height, scale, limit) {
   return dedupeCandidates(candidateBuffer, limit, 0.5);
 }
 
+/**
+ * Run the fast grayscale template-matching pass across a small set of scales.
+ *
+ * This phase only proposes likely candidates. It does not decide the final
+ * match because color is intentionally verified later.
+ */
 function grayscaleCandidates(source, scaledTemplates, scales, limit) {
   const sourceGray = toGrayMat(source);
   try {
@@ -191,6 +260,13 @@ function grayscaleCandidates(source, scaledTemplates, scales, limit) {
   }
 }
 
+/**
+ * Compare a candidate patch with the template using RGBA-aware per-pixel color
+ * difference.
+ *
+ * Transparent template pixels are ignored. Out-of-bounds reads return null so
+ * bad candidates never corrupt the score with NaN values.
+ */
 function colorSimilarity(source, template, atX, atY) {
   let weightedDiff = 0;
   let weight = 0;
@@ -228,6 +304,14 @@ function colorSimilarity(source, template, atX, atY) {
   return Math.max(0, 1 - avgDiff / 255);
 }
 
+/**
+ * Combine grayscale candidate quality and color verification into final ranked
+ * candidates.
+ *
+ * The score weights are intentionally biased slightly toward color because the
+ * product requirement is to respect red/blue and other visually meaningful
+ * color differences.
+ */
 function verifyCandidates(source, scaledTemplates, candidates) {
   const verified = [];
   for (const candidate of candidates) {
@@ -251,6 +335,10 @@ function verifyCandidates(source, scaledTemplates, candidates) {
   return verified.sort((a, b) => b.combinedScore - a.combinedScore);
 }
 
+/**
+ * Draw a visible rectangle around a match on a screenshot buffer. The helper
+ * uses this for annotated debug artefacts.
+ */
 function drawRect(image, rect, rgba) {
   const left = Math.max(0, rect.x);
   const top = Math.max(0, rect.y);
@@ -272,10 +360,17 @@ function drawRect(image, rect, rgba) {
   }
 }
 
+/**
+ * Normalize floating-point scores for result payloads and debug JSON.
+ */
 function toFixedNumber(value) {
   return Number.isFinite(value) ? Number(value.toFixed(6)) : null;
 }
 
+/**
+ * Convert a result into a short human-readable reason string used in thrown
+ * errors and diagnostics.
+ */
 function formatResultReason(result) {
   if (!result) {
     return 'unknown';
@@ -290,6 +385,10 @@ function formatResultReason(result) {
   return details.length > 0 ? `${result.reason}: ${details.join(' ')}` : result.reason;
 }
 
+/**
+ * Strip internal fields and normalize score precision before exposing a
+ * candidate in result objects or debug payloads.
+ */
 function sanitizeCandidate(candidate) {
   if (!candidate) {
     return null;
@@ -308,6 +407,10 @@ function sanitizeCandidate(candidate) {
   };
 }
 
+/**
+ * Build the standard public result shape used by all locate/wait/click/type
+ * operations.
+ */
 function createResult(reason, fields = {}) {
   return {
     found: reason === 'found',
@@ -327,6 +430,13 @@ function createResult(reason, fields = {}) {
   };
 }
 
+/**
+ * Persist the searched region, the annotated region, and the structured match
+ * metadata for troubleshooting.
+ *
+ * Debug artefacts are written only when requested so the default runtime stays
+ * lightweight.
+ */
 async function writeDebugArtifacts(debugDir, label, screenshotBuffer, result) {
   if (!debugDir) {
     return;
@@ -362,6 +472,10 @@ async function writeDebugArtifacts(debugDir, label, screenshotBuffer, result) {
   await fsp.writeFile(path.join(debugDir, `${label}-meta.json`), JSON.stringify(payload, null, 2));
 }
 
+/**
+ * Resolve the active viewport rectangle. The helper uses this as the baseline
+ * coordinate space for region presets and custom region clipping.
+ */
 async function viewportRect(page) {
   const viewport = page.viewportSize();
   if (viewport) {
@@ -375,6 +489,10 @@ function regionsEqual(a, b) {
   return a.x === b.x && a.y === b.y && a.width === b.width && a.height === b.height;
 }
 
+/**
+ * Clip a custom region to the current viewport and keep track of whether the
+ * user's requested region had to be modified.
+ */
 function normalizeRegionRect(region, viewport) {
   const requested = {
     x: Math.round(region.x),
@@ -395,6 +513,13 @@ function normalizeRegionRect(region, viewport) {
   };
 }
 
+/**
+ * Resolve either a named region preset or a custom rectangle into the actual
+ * screenshot area used for matching.
+ *
+ * The default behavior is intentionally region-first (`main`-like inset), not
+ * full-page search.
+ */
 async function resolveRegion(page, region) {
   const viewport = await viewportRect(page);
   const defaultInset = {
@@ -456,6 +581,10 @@ async function resolveRegion(page, region) {
   };
 }
 
+/**
+ * Capture either the full page, the viewport, or a clipped region with
+ * animations disabled and the caret hidden to improve visual determinism.
+ */
 async function captureRegion(page, effectiveRegion, fullPage) {
   if (!effectiveRegion && fullPage) {
     return page.screenshot({ type: 'png', fullPage: true, animations: 'disabled', caret: 'hide' });
@@ -476,6 +605,11 @@ async function captureRegion(page, effectiveRegion, fullPage) {
   });
 }
 
+/**
+ * Compute the final click point. By default this is the center of the match,
+ * but callers can supply an offset for composite controls such as checkbox rows
+ * or label-plus-input templates.
+ */
 function offsetPoint(match, clickOffset) {
   if (!clickOffset) {
     return { x: match.centerX, y: match.centerY };
@@ -486,6 +620,10 @@ function offsetPoint(match, clickOffset) {
   };
 }
 
+/**
+ * Read, validate, and scale a template image for later reuse inside a wait
+ * loop.
+ */
 async function loadTemplateBundle(templatePath, scales) {
   try {
     const template = decodePng(await fsp.readFile(templatePath));
@@ -511,6 +649,13 @@ async function loadTemplateBundle(templatePath, scales) {
   }
 }
 
+/**
+ * Core locate implementation used by all public image-based operations.
+ *
+ * It handles region resolution, screenshot capture, fast candidate generation,
+ * color-aware verification, ambiguity checks, and optional debug artefact
+ * writing.
+ */
 async function locateWithTemplate(page, templateBundle, options = {}) {
   const confidence = options.confidence ?? DEFAULT_CONFIDENCE;
   const ambiguityGap = options.ambiguityGap ?? DEFAULT_AMBIGUITY_GAP;
@@ -655,6 +800,11 @@ function isTerminalReason(reason) {
   return TERMINAL_REASONS.has(reason);
 }
 
+/**
+ * Build the thrown error text for wait-based operations. If a candidate exists,
+ * the message includes the combined, color, and grayscale scores to make tuning
+ * and diagnosis easier.
+ */
 function failureMessage(result, confidence) {
   if (result.bestCandidate && Number.isFinite(result.bestCandidate.combinedScore)) {
     return `Image match failed: reason=${result.reason} confidence=${confidence.toFixed(4)} best=${result.bestCandidate.combinedScore.toFixed(4)} color=${result.bestCandidate.colorScore.toFixed(4)} gray=${result.bestCandidate.score.toFixed(4)}`;
@@ -662,12 +812,22 @@ function failureMessage(result, confidence) {
   return `Image match failed: reason=${result.reason} confidence=${confidence.toFixed(4)} ${result.message || 'best=none'}`;
 }
 
+/**
+ * Locate a template once and return the full structured result.
+ */
 async function locateByImage(page, templatePath, options = {}) {
   const scales = options.scales ?? DEFAULT_SCALES;
   const templateBundle = await loadTemplateBundle(templatePath, scales);
   return locateWithTemplate(page, templateBundle, options);
 }
 
+/**
+ * Poll until a template match is found or the timeout is reached.
+ *
+ * Non-recoverable conditions (invalid template, invalid region, scoring
+ * failures) stop immediately with a clear error instead of burning time in a
+ * retry loop.
+ */
 async function waitForImage(page, templatePath, options = {}) {
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const pollMs = options.pollMs ?? DEFAULT_POLL_MS;
@@ -690,6 +850,12 @@ async function waitForImage(page, templatePath, options = {}) {
   throw new Error(failureMessage(lastResult, confidence));
 }
 
+/**
+ * Convenience boolean check for presence-by-image.
+ *
+ * Plain `not-found` becomes `false`; invalid or ambiguous states remain errors
+ * because those are operational problems, not normal absence.
+ */
 async function existsByImage(page, templatePath, options = {}) {
   const result = await locateByImage(page, templatePath, options);
   if (result.found) {
@@ -701,13 +867,190 @@ async function existsByImage(page, templatePath, options = {}) {
   throw new Error(formatResultReason(result));
 }
 
+/**
+ * Show a temporary visual overlay around a match or DOM-located element.
+ *
+ * This intentionally imitates Sakuli's highlight behavior so headed runs are
+ * easier to understand and demo.
+ */
+async function highlightMatchBox(page, rect, options = {}) {
+  const highlightMs = options.highlightMs ?? ENV_HIGHLIGHT_MS ?? 700;
+  if (!rect || !Number.isFinite(highlightMs) || highlightMs <= 0) {
+    return;
+  }
+  const color = options.highlightColor || '#ffb703';
+  const fill = options.highlightFillColor || 'rgba(255, 183, 3, 0.14)';
+  await page.evaluate(async ({ x, y, width, height, color: borderColor, fill: bgFill, delay }) => {
+    const overlay = document.createElement('div');
+    overlay.setAttribute('data-check-cep-vision-highlight', 'true');
+    overlay.style.position = 'fixed';
+    overlay.style.left = `${x}px`;
+    overlay.style.top = `${y}px`;
+    overlay.style.width = `${width}px`;
+    overlay.style.height = `${height}px`;
+    overlay.style.boxSizing = 'border-box';
+    overlay.style.border = `5px solid ${borderColor}`;
+    overlay.style.borderRadius = '8px';
+    overlay.style.background = bgFill;
+    overlay.style.boxShadow = `0 0 0 3px rgba(255,255,255,0.92), 0 0 18px 6px ${borderColor}`;
+    overlay.style.pointerEvents = 'none';
+    overlay.style.zIndex = '2147483647';
+    document.body.appendChild(overlay);
+    await new Promise((resolve) => setTimeout(resolve, delay));
+    overlay.remove();
+  }, {
+    x: rect.x,
+    y: rect.y,
+    width: rect.width,
+    height: rect.height,
+    color,
+    fill,
+    delay: highlightMs,
+  });
+}
+
+/**
+ * Highlight a single Playwright locator by drawing an overlay around its first
+ * visible bounding box.
+ */
+async function highlightLocator(locator, options = {}) {
+  if (!(await isVisibleLocator(locator))) {
+    throw new Error('No visible element available for highlighting.');
+  }
+  const box = await locator.first().boundingBox();
+  if (!box) {
+    throw new Error('Unable to determine bounding box for highlight.');
+  }
+  const page = await locator.first().page();
+  await highlightMatchBox(page, box, options);
+  return { strategy: 'dom' };
+}
+
+/**
+ * Highlight the first visible locator from a candidate list.
+ */
+async function highlightFirstVisible(candidates, options = {}) {
+  for (const locator of candidates) {
+    if (await isVisibleLocator(locator)) {
+      return highlightLocator(locator, options);
+    }
+  }
+  throw new Error('No visible highlight target found.');
+}
+
+/**
+ * Lightweight visibility guard used by the DOM convenience helpers.
+ */
+async function isVisibleLocator(locator) {
+  if (!locator || typeof locator.count !== 'function' || typeof locator.first !== 'function') {
+    return false;
+  }
+  if ((await locator.count()) === 0) {
+    return false;
+  }
+  try {
+    return await locator.first().isVisible();
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Click the first visible DOM locator in the supplied list.
+ *
+ * This is intentionally tiny but useful for migration work where the original
+ * Sakuli step already used DOM/HTML selection and the test author only wants a
+ * concise "try these visible targets" helper.
+ */
+async function clickFirstVisible(candidates, options = {}) {
+  for (const locator of candidates) {
+    if (await isVisibleLocator(locator)) {
+      await highlightLocator(locator, options).catch(() => undefined);
+      await locator.first().click();
+      return { strategy: 'dom' };
+    }
+  }
+  throw new Error('No visible click target found.');
+}
+
+/**
+ * Fill the first visible selector from a list of candidate selectors.
+ */
+async function fillFirstVisible(page, selectors, value, options = {}) {
+  for (const selector of selectors) {
+    const locator = page.locator(selector).first();
+    if (await isVisibleLocator(locator)) {
+      await highlightLocator(locator, options).catch(() => undefined);
+      await locator.fill(value);
+      return { strategy: 'dom' };
+    }
+  }
+  throw new Error(`No visible selector found for value ${value}`);
+}
+
+/**
+ * Small pass-through used to keep the image-first fallback wrappers readable.
+ */
+function visionOptions(options = {}) {
+  return options;
+}
+
+/**
+ * Image-first typing with DOM fallback.
+ *
+ * This is useful for migration cases where the old Sakuli step already mixed a
+ * visual target with a fallback path, but the actual vision mechanics remain in
+ * `typeByImage()`.
+ */
+async function typeByImageOr(page, templatePath, text, selectors, options = {}) {
+  try {
+    const result = await typeByImage(page, templatePath, text, visionOptions(options));
+    return { strategy: 'vision', result };
+  } catch {
+    await fillFirstVisible(page, selectors, text, options);
+    return { strategy: 'dom' };
+  }
+}
+
+/**
+ * Image-first clicking with DOM fallback.
+ */
+async function clickByImageOr(page, templatePath, candidates, options = {}) {
+  try {
+    const result = await clickByImage(page, templatePath, visionOptions(options));
+    return { strategy: 'vision', result };
+  } catch {
+    await clickFirstVisible(candidates, options);
+    return { strategy: 'dom' };
+  }
+}
+
+/**
+ * Locate and highlight an image match without clicking it.
+ *
+ * This mirrors Sakuli's visual feedback and is useful for demo runs or future
+ * manual/reference documentation.
+ */
+async function highlightByImage(page, templatePath, options = {}) {
+  const result = await waitForImage(page, templatePath, options);
+  await highlightMatchBox(page, result.bestCandidate, options);
+  return result;
+}
+
+/**
+ * Click the best image match after waiting for it and highlighting it.
+ */
 async function clickByImage(page, templatePath, options = {}) {
   const result = await waitForImage(page, templatePath, options);
+  await highlightMatchBox(page, result.bestCandidate, options);
   const point = offsetPoint(result.bestCandidate, options.clickOffset);
   await page.mouse.click(point.x, point.y);
   return { ...result, clickPoint: point };
 }
 
+/**
+ * Type text into the best image match by clicking it first.
+ */
 async function typeByImage(page, templatePath, text, options = {}) {
   const clicked = await clickByImage(page, templatePath, options);
   await page.keyboard.type(text);
@@ -719,6 +1062,13 @@ module.exports = {
     locateByImage,
     waitForImage,
     existsByImage,
+    highlightLocator,
+    highlightFirstVisible,
+    highlightByImage,
+    clickFirstVisible,
+    fillFirstVisible,
+    clickByImageOr,
+    typeByImageOr,
     clickByImage,
     typeByImage,
     constants: {

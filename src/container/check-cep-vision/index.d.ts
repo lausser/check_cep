@@ -24,6 +24,9 @@ export interface VisionOptions {
   debugLabel?: string;
   scales?: number[];
   maxCandidates?: number;
+  highlightMs?: number;
+  highlightColor?: string;
+  highlightFillColor?: string;
 }
 
 export interface MatchCandidate {
@@ -63,6 +66,11 @@ export interface ClickResult extends MatchResult {
   };
 }
 
+export interface StrategyResult {
+  strategy: 'vision' | 'dom';
+  result?: ClickResult;
+}
+
 export interface VisionConstants {
   DEFAULT_CONFIDENCE: number;
   DEFAULT_TIMEOUT_MS: number;
@@ -79,6 +87,13 @@ export interface VisionApi {
   locateByImage(page: any, templatePath: string, options?: VisionOptions): Promise<MatchResult>;
   waitForImage(page: any, templatePath: string, options?: VisionOptions): Promise<MatchResult>;
   existsByImage(page: any, templatePath: string, options?: VisionOptions): Promise<boolean>;
+  highlightLocator(locator: any, options?: VisionOptions): Promise<{ strategy: 'dom' }>;
+  highlightFirstVisible(candidates: any[], options?: VisionOptions): Promise<{ strategy: 'dom' }>;
+  highlightByImage(page: any, templatePath: string, options?: VisionOptions): Promise<MatchResult>;
+  clickFirstVisible(candidates: any[]): Promise<{ strategy: 'dom' }>;
+  fillFirstVisible(page: any, selectors: string[], value: string, options?: VisionOptions): Promise<{ strategy: 'dom' }>;
+  clickByImageOr(page: any, templatePath: string, candidates: any[], options?: VisionOptions): Promise<StrategyResult>;
+  typeByImageOr(page: any, templatePath: string, text: string, selectors: string[], options?: VisionOptions): Promise<StrategyResult>;
   clickByImage(page: any, templatePath: string, options?: VisionOptions): Promise<ClickResult>;
   typeByImage(page: any, templatePath: string, text: string, options?: VisionOptions): Promise<ClickResult>;
   constants: VisionConstants;

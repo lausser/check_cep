@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=1280">
+  <title>Contact Form</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: Arial, sans-serif;
+      background: linear-gradient(135deg, #e8eaf6 0%, #c5cae9 100%);
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      min-height: 100vh;
+    }
+    .card {
+      background: #fff;
+      border-radius: 12px;
+      box-shadow: 0 4px 24px rgba(0,0,0,0.12);
+      padding: 40px 48px;
+      width: 520px;
+    }
+    h1 {
+      font-size: 22px;
+      color: #1a237e;
+      margin-bottom: 28px;
+      text-align: center;
+    }
+    .field-row {
+      display: flex;
+      align-items: center;
+      margin-bottom: 20px;
+    }
+    .field-row label {
+      width: 110px;
+      font-size: 15px;
+      font-weight: 600;
+      color: #37474f;
+      flex-shrink: 0;
+    }
+    .field-row input {
+      flex: 1;
+      padding: 10px 14px;
+      font-size: 15px;
+      font-family: Arial, sans-serif;
+      border: 2px solid #90a4ae;
+      border-radius: 6px;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+    .field-row input:focus {
+      border-color: #1565c0;
+    }
+    .actions {
+      text-align: center;
+      margin-top: 28px;
+    }
+    #submit-btn {
+      padding: 12px 40px;
+      font-size: 16px;
+      font-family: Arial, sans-serif;
+      font-weight: 600;
+      color: #fff;
+      background: #1565c0;
+      border: none;
+      border-radius: 8px;
+      cursor: pointer;
+      letter-spacing: 0.5px;
+    }
+    #submit-btn:hover { background: #0d47a1; }
+    .result {
+      text-align: center;
+      margin-top: 16px;
+      font-size: 14px;
+      color: #2e7d32;
+      min-height: 20px;
+    }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>Contact Form</h1>
+
+    <div class="field-row" id="row-name">
+      <label for="name-input">Name</label>
+      <input id="name-input" name="name" type="text" autocomplete="off" />
+    </div>
+
+    <div class="field-row" id="row-prename">
+      <label for="prename-input">Prename</label>
+      <input id="prename-input" name="prename" type="text" autocomplete="off" />
+    </div>
+
+    <div class="field-row" id="row-city">
+      <label for="city-input">City</label>
+      <input id="city-input" name="city" type="text" autocomplete="off" />
+    </div>
+
+    <div class="actions">
+      <button id="submit-btn" onclick="handleSubmit()">Submit</button>
+    </div>
+    <div class="result" id="result"></div>
+  </div>
+
+  <script>
+    function handleSubmit() {
+      var name = document.getElementById('name-input').value;
+      var prename = document.getElementById('prename-input').value;
+      var city = document.getElementById('city-input').value;
+      document.getElementById('result').textContent =
+        'Submitted: ' + name + ' ' + prename + ' from ' + city;
+      document.body.setAttribute('data-submitted', 'true');
+    }
+  </script>
+</body>
+</html>

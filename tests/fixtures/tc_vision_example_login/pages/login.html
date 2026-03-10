@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=1280">
+  <title>Sign In — CloudOps Portal</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: Arial, sans-serif;
+      background: #f0f2f5;
+      color: #1a1a2e;
+    }
+
+    /* --- Navbar --- */
+    .navbar {
+      background: #fff;
+      border-bottom: 1px solid #e0e0e0;
+      display: flex;
+      align-items: center;
+      padding: 0 32px;
+      height: 56px;
+    }
+    .navbar .logo {
+      font-size: 18px;
+      font-weight: 700;
+      color: #1a237e;
+      letter-spacing: 0.5px;
+    }
+    .navbar .nav-links { margin-left: 40px; display: flex; gap: 24px; }
+    .navbar .nav-links a {
+      font-size: 13px;
+      color: #546e7a;
+      text-decoration: none;
+    }
+    .navbar .nav-links a:hover { color: #1a237e; }
+    .navbar .nav-right { margin-left: auto; font-size: 13px; color: #78909c; }
+
+    /* --- Hero banner --- */
+    .hero {
+      background: linear-gradient(135deg, #1a237e 0%, #0d47a1 50%, #01579b 100%);
+      color: #fff;
+      text-align: center;
+      padding: 36px 24px 28px;
+    }
+    .hero h1 { font-size: 24px; font-weight: 700; margin-bottom: 8px; }
+    .hero p { font-size: 14px; opacity: 0.85; }
+
+    /* --- Main layout --- */
+    .main {
+      display: flex;
+      justify-content: center;
+      gap: 40px;
+      padding: 32px 48px;
+      max-width: 1100px;
+      margin: 0 auto;
+    }
+
+    /* --- Features sidebar --- */
+    .features {
+      width: 340px;
+      flex-shrink: 0;
+    }
+    .feature-card {
+      background: #fff;
+      border-radius: 8px;
+      padding: 20px;
+      margin-bottom: 16px;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.08);
+    }
+    .feature-card h3 {
+      font-size: 14px;
+      color: #1a237e;
+      margin-bottom: 8px;
+    }
+    .feature-card p {
+      font-size: 13px;
+      color: #546e7a;
+      line-height: 1.5;
+    }
+
+    /* --- Login card --- */
+    .login-card {
+      background: #fff;
+      border-radius: 12px;
+      padding: 36px 40px;
+      width: 380px;
+      box-shadow: 0 4px 20px rgba(0,0,0,0.1);
+    }
+    .login-card h2 {
+      font-size: 20px;
+      color: #1a237e;
+      margin-bottom: 24px;
+      text-align: center;
+    }
+
+    /* --- Form fields --- */
+    .form-group {
+      margin-bottom: 18px;
+    }
+    .form-group label {
+      display: block;
+      font-size: 13px;
+      font-weight: 600;
+      color: #37474f;
+      margin-bottom: 6px;
+    }
+    .form-group input {
+      width: 100%;
+      padding: 10px 14px;
+      font-size: 14px;
+      font-family: Arial, sans-serif;
+      border: 2px solid #b0bec5;
+      border-radius: 6px;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+    .form-group input:focus { border-color: #1565c0; }
+
+    /* --- CTA button --- */
+    #signin-btn {
+      width: 100%;
+      padding: 12px;
+      font-size: 15px;
+      font-family: Arial, sans-serif;
+      font-weight: 600;
+      color: #fff;
+      background: #1565c0;
+      border: none;
+      border-radius: 8px;
+      cursor: pointer;
+      margin-top: 8px;
+    }
+    #signin-btn:hover { background: #0d47a1; }
+
+    /* --- Divider --- */
+    .divider {
+      display: flex;
+      align-items: center;
+      margin: 20px 0;
+      font-size: 12px;
+      color: #90a4ae;
+    }
+    .divider::before, .divider::after {
+      content: '';
+      flex: 1;
+      height: 1px;
+      background: #e0e0e0;
+    }
+    .divider span { padding: 0 12px; }
+
+    /* --- Social buttons (visually distinct from CTA) --- */
+    .social-btn {
+      display: block;
+      width: 100%;
+      padding: 10px;
+      margin-bottom: 10px;
+      font-size: 13px;
+      font-family: Arial, sans-serif;
+      font-weight: 500;
+      border-radius: 6px;
+      cursor: pointer;
+      text-align: center;
+    }
+    .social-google {
+      background: #fff;
+      border: 2px solid #e0e0e0;
+      color: #37474f;
+    }
+    .social-github {
+      background: #24292e;
+      border: none;
+      color: #fff;
+    }
+
+    /* --- Footer links --- */
+    .footer-links {
+      text-align: center;
+      margin-top: 16px;
+      font-size: 12px;
+      color: #90a4ae;
+    }
+    .footer-links a { color: #1565c0; text-decoration: none; }
+
+    /* --- Page footer --- */
+    .page-footer {
+      text-align: center;
+      padding: 20px;
+      font-size: 12px;
+      color: #90a4ae;
+      border-top: 1px solid #e0e0e0;
+      margin-top: 24px;
+    }
+
+    /* --- Result area --- */
+    .result {
+      text-align: center;
+      margin-top: 12px;
+      font-size: 13px;
+      color: #2e7d32;
+      min-height: 18px;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Navbar -->
+  <div class="navbar">
+    <span class="logo">CloudOps</span>
+    <div class="nav-links">
+      <a href="#">Products</a>
+      <a href="#">Documentation</a>
+      <a href="#">Pricing</a>
+      <a href="#">Support</a>
+    </div>
+    <span class="nav-right">Need an account? <a href="#" style="color:#1565c0;text-decoration:none;">Sign up</a></span>
+  </div>
+
+  <!-- Hero banner -->
+  <div class="hero">
+    <h1>Welcome to CloudOps Portal</h1>
+    <p>Manage your infrastructure, monitor deployments, and scale with confidence.</p>
+  </div>
+
+  <!-- Main content -->
+  <div class="main">
+
+    <!-- Features sidebar -->
+    <div class="features">
+      <div class="feature-card">
+        <h3>Real-time Monitoring</h3>
+        <p>Track CPU, memory, and network metrics across all your clusters with sub-second granularity.</p>
+      </div>
+      <div class="feature-card">
+        <h3>Automated Deployments</h3>
+        <p>Push to main and let our CI/CD pipeline handle the rest. Zero-downtime deployments guaranteed.</p>
+      </div>
+      <div class="feature-card">
+        <h3>Team Collaboration</h3>
+        <p>Shared dashboards, alerting rules, and runbooks. Keep your entire team on the same page.</p>
+      </div>
+    </div>
+
+    <!-- Login card -->
+    <div class="login-card">
+      <h2>Sign In</h2>
+
+      <div class="form-group">
+        <label for="username">Username</label>
+        <input id="username" name="username" type="text" autocomplete="off" placeholder="Enter your username" />
+      </div>
+
+      <div class="form-group">
+        <label for="password">Password</label>
+        <input id="password" name="password" type="password" autocomplete="off" placeholder="Enter your password" />
+      </div>
+
+      <button id="signin-btn" onclick="handleSignIn()">Sign In</button>
+
+      <div class="result" id="result"></div>
+
+      <div class="divider"><span>or continue with</span></div>
+
+      <button class="social-btn social-google" onclick="void(0)">Sign in with Google</button>
+      <button class="social-btn social-github" onclick="void(0)">Sign in with GitHub</button>
+
+      <div class="footer-links">
+        <a href="#">Forgot password?</a> &middot; <a href="#">Terms</a> &middot; <a href="#">Privacy</a>
+      </div>
+    </div>
+  </div>
+
+  <!-- Page footer -->
+  <div class="page-footer">
+    &copy; 2025 CloudOps Inc. All rights reserved.
+  </div>
+
+  <script>
+    function handleSignIn() {
+      var username = document.getElementById('username').value;
+      var password = document.getElementById('password').value;
+      document.getElementById('result').textContent =
+        'Signed in as ' + username;
+      document.body.setAttribute('data-submitted', 'true');
+    }
+  </script>
+</body>
+</html>
