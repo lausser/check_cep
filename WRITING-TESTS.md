@@ -516,6 +516,78 @@ Use these to diagnose why a match failed:
 
 ---
 
+## Visual Narration for Headed Demos
+
+When running tests in headed mode (visible browser), you may want visual
+highlighting to narrate what the test is doing. This is useful for:
+- Demo presentations
+- Debugging alongside a human spectator
+- Recording test execution videos
+
+### The Pattern: Playwright Finds, CEP Highlights
+
+Use Playwright's robust locators to find elements, then use
+`vision.highlightLocator()` to draw a visible overlay:
+
+```typescript
+// 1. Playwright finds the element (auto-waits, stable)
+await expect(page.getByRole('heading', { name: /Welcome/i })).toBeVisible();
+
+// 2. CEP highlights it for human spectators
+await vision.highlightLocator(page.getByRole('heading', { name: /Welcome/i }));
+```
+
+### Why vision.highlightLocator() Instead of Playwright's .highlight()?
+
+Playwright 1.58+ has a built-in `.highlight()` method on locators, but
+`vision.highlightLocator()` is preferred for demos because:
+
+| Feature | Playwright `.highlight()` | `vision.highlightLocator()` |
+|--------|--------------------------|----------------------------|
+| Duration | ~2 seconds (brief) | Configurable (default 2.2s via `CEP_VISION_HIGHLIGHT_MS`) |
+| Colors | Default only | Customizable (`highlightColor`, `highlightFillColor`) |
+| Use case | Quick debugging | Demo/visual narration |
+
+### Customizing Highlights
+
+Pass options to customize highlight appearance:
+
+```typescript
+await vision.highlightLocator(page.getByRole('link', { name: /Submit/i }), {
+  highlightMs: 1500,              // Duration in ms
+  highlightColor: '#ff0000',       // Border color
+  highlightFillColor: 'rgba(255, 0, 0, 0.1)', // Fill color
+});
+```
+
+### Environment Variables
+
+Control highlight duration globally:
+
+```bash
+# Set highlight to 3 seconds
+CEP_VISION_HIGHLIGHT_MS=3000 python3 src/check_cep ...
+```
+
+### Anti-Pattern: Convenience Helpers That Skip Auto-Waiting
+
+Avoid helpers that bypass Playwright's built-in auto-waiting:
+
+```typescript
+// BAD: clickFirstVisible doesn't auto-wait for elements
+await vision.clickFirstVisible([locator1, locator2]);  // May fail intermittently
+
+// GOOD: Pure Playwright click auto-waits for visibility + stability
+await page.getByRole('button', { name: /Submit/i }).click();
+```
+
+The `vision.clickFirstVisible()` and `vision.highlightFirstVisible()`
+convenience helpers are useful for migration from Sakuli, but they don't
+have Playwright's auto-waiting behavior. For stable tests, prefer
+pure Playwright locators.
+
+---
+
 ## Worked Examples
 
 Three example fixtures demonstrate different aspects of the vision API.

@@ -7,6 +7,9 @@ ENV PLAYWRIGHT_VERSION=${PLAYWRIGHT_VERSION} \
     DEBIAN_FRONTEND="noninteractive" \
     TZ="UTC"
 
+# Helpful addons for assisted writing of test scripts
+ARG AI_NODE_PACKAGES="@google/gemini-cli @playwright/cli"
+
 # Install Python 3, system dependencies, and configure sudo for pwuser
 # (sudo needed for `npx playwright install` to install browser system deps)
 RUN apt-get update && \
@@ -47,21 +50,48 @@ RUN if [ -s package-lock.json ]; then \
         rm -f package.json package-lock.json && \
         npm init -y && \
         npm install @playwright/test; \
-    fi && \
-    npx playwright install --with-deps msedge && \
-    npx playwright install --with-deps chrome && \
+    fi
+
+# AI Tooling
+ENV GEMINI_YOLO=true \
+    GEMINI_CONFIG_HOME="/home/pwuser/.gemini" \
+    PATH="/home/pwuser/node_modules/.bin:${PATH}"
+RUN if [ -n "$AI_NODE_PACKAGES" ]; then \
+        mkdir -p /home/pwuser/.gemini && \
+        echo "--- Installing AI Addons locally ---" && \
+        npm install $AI_NODE_PACKAGES && \
+        # Create settings.json to silence root warnings and telemetry
+        printf '{\n  "security": {\n    "folderTrust": {\n      "enabled": false\n    },\n    "auth": {\n      "selectedType": "gemini-api-key"\n    },\n    "enablePermanentToolApproval": true\n  },\n  "ui": {\n    "showHomeDirectoryWarning": false,\n    "theme": "Default Light",\n    "showCompatibilityWarnings": false\n  },\n  "general": {\n    "defaultApprovalMode": "default"\n  }\n}\n' > /home/pwuser/.gemini/settings.json; \
+    fi
+
+# Ensure global npm binaries are in the PATH
+ENV PATH="/home/pwuser/.npm-global/bin:${PATH}"
+
+# 3. Playwright Browser Engines
+RUN npx playwright install --with-deps msedge chrome && \
     npm config set update-notifier false && \
-    npm config set color false
+    npm config set color false && \
+    npm cache clean --force
 
 # Cleanup npm artifacts
 RUN rm -f package.json package-lock.json
+
+# Install git temporarily and fetch the skills
+USER root
+RUN apt-get update && apt-get install -y git && \
+    git clone --depth 1 https://github.com/microsoft/playwright-cli.git /tmp/pw-cli && \
+    mkdir -p /home/pwuser/.gemini/skills && \
+    cp -r /tmp/pw-cli/skills/* /home/pwuser/.gemini/skills/ && \
+    chown -R pwuser:pwuser /home/pwuser/.gemini && \
+    rm -rf /tmp/pw-cli && \
+    apt-get purge -y git && apt-get autoremove -y && rm -rf /var/lib/apt/lists/*
 
 # Copy container-side code
 USER root
 COPY image/run.py /home/pwuser/run.py
 COPY image/plugins/ /home/pwuser/plugins/
 RUN chmod 755 /home/pwuser/run.py && \
-    chown -R pwuser:pwuser /home/pwuser/run.py /home/pwuser/plugins/
+    chown -R pwuser:pwuser /home/pwuser
 
 USER pwuser
 CMD ["python3", "./run.py"]
