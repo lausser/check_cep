@@ -74,6 +74,16 @@ discovery.
 
 ## check-cep-vision API
 
+> **Early stage — use with a grain of salt.**  The vision matching
+> library works well in our integration tests and first customer
+> deployments, but it is not yet battle-hardened.  Some pages or
+> layouts may produce unreliable matches.  If vision matching does not
+> work for your use case, don't fight it — use standard Playwright
+> DOM locators instead, or use the hybrid functions (`clickByImageOr`,
+> `typeByImageOr`) which fall back to DOM selectors automatically.
+> We will not investigate individual vision matching failures at this
+> point.
+
 The `check-cep-vision` library provides image-based visual matching
 for Playwright tests.  It is bundled in the container at
 `/home/pwuser/node_modules/check-cep-vision`.
@@ -365,7 +375,10 @@ box.  Without an offset, the click lands at the center.
 
 ## Selector Strategy Guide
 
-### When to Use DOM Selectors
+### When to Use DOM Selectors (Default Choice)
+
+DOM selectors are the **recommended default**.  They are fast, reliable,
+and benefit from Playwright's built-in auto-waiting:
 
 - The page has stable `id` attributes or `data-testid` markers
 - You don't need to verify visual appearance
@@ -376,7 +389,10 @@ await page.locator('#name-input').fill('Alice');
 await page.locator('#submit-btn').click();
 ```
 
-### When to Use Vision Selectors
+### When to Use Vision Selectors (Experimental)
+
+Vision-only selectors can work but are less predictable.  Consider them
+only when DOM selectors are truly not an option:
 
 - The DOM structure is unstable or generated dynamically
 - You need to verify that elements are visually present and correct
@@ -390,13 +406,14 @@ await vision.typeByImage(page, asset('name-row.png'), 'Alice', {
 });
 ```
 
-### When to Use Hybrid Selectors (Recommended for Production)
+### When to Use Hybrid Selectors (Recommended If You Want Vision)
 
-The hybrid approach tries vision first and falls back to DOM selectors
-if vision matching fails.  This gives you:
+If you want the visual verification that vision provides but cannot
+afford flaky tests, **always use the hybrid functions**.  They try
+vision first and fall back to DOM selectors automatically:
 
-- Visual verification when possible
-- Reliability even if rendering changes slightly
+- Visual verification when it works, DOM reliability when it doesn't
+- No test failures due to vision quirks — the fallback catches them
 
 ```typescript
 // typeByImageOr: vision first, CSS selector fallback
