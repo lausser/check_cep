@@ -460,6 +460,99 @@ pytest tests/integration/test_modes.py -k "tc_vision_example_form and local" -v
 Use `--headed --shell` for live debugging.  See [TUTORIAL.md, section 8](TUTORIAL.md)
 for headed mode setup and usage.
 
+### Recording Tests with Codegen
+
+The fastest way to start a new test is to record your interactions.
+Playwright's **codegen** tool watches what you do in the browser and
+generates the corresponding test code in real time.
+
+Inside a `--headed --shell` container session, run:
+
+```bash
+cep_codegen https://example.com
+```
+
+Or equivalently:
+
+```bash
+npx playwright codegen https://example.com
+```
+
+Two windows appear on your desktop:
+
+1. **The browser** — navigate and interact with the target site as a
+   normal user would.
+2. **The Playwright Inspector** — shows the generated code as you click,
+   type, and navigate.  Use the toolbar to:
+   - **Record** — start/stop recording interactions
+   - **Pick locator** — hover over elements to see Playwright's
+     suggested selector
+   - **Assert visibility / text / value** — add assertions without
+     writing code
+
+When you're done, copy the generated code from the Inspector into your
+`*.test.ts` file.  The output is standard Playwright — wrap it in a
+`test()` block, adjust selectors if needed, and you have a working test.
+
+**Tip**: Codegen is especially useful for navigating complex forms,
+cookie consent dialogs, and multi-step wizards where figuring out the
+right selectors by hand would be tedious.  Record the flow first, then
+refine the selectors and add assertions.
+
+### Chrome Flags Are Handled Automatically
+
+The container wraps the Chromium binary to inject GPU-disable flags
+(software rendering) and Wayland display forwarding.  This means:
+
+- **You don't need GPU flags in `playwright.config.ts`** — the container
+  forces `--disable-gpu --use-gl=swiftshader` and related flags at the
+  binary level, before Playwright even launches.
+- **Wayland/X11 just works** — the wrapper detects `WAYLAND_DISPLAY`
+  and injects `--ozone-platform=wayland` automatically.
+- **Every Playwright command benefits** — `test`, `test --headed`,
+  `codegen`, and manual Node.js scripts all go through the same wrapper.
+
+A minimal `playwright.config.ts` is sufficient:
+
+```typescript
+import { defineConfig } from '@playwright/test';
+
+export default defineConfig({
+  testDir: '.',
+  timeout: 30000,
+  use: {
+    headless: true,
+    viewport: { width: 1280, height: 720 },
+    deviceScaleFactor: 1,
+  },
+  projects: [
+    { name: 'chromium', use: { browserName: 'chromium' } },
+  ],
+});
+```
+
+No `launchOptions.args` needed — the container handles it.
+
+### Viewport Size for Headed Mode
+
+When running tests in headed mode (visible browser on your desktop),
+consider enlarging the viewport beyond the default 1280x720.  A larger
+viewport (e.g. 1920x1080) ensures that interactive elements are not
+clipped or pushed off-screen, which can cause image matching and click
+actions to miss their targets.
+
+Set the viewport in the test file using `test.use()`, not in
+`playwright.config.ts`, so the config stays reusable:
+
+```typescript
+const VIEWPORT = { width: 1920, height: 1080 };
+test.use({ viewport: VIEWPORT });
+```
+
+This is especially important for forms and multi-step wizards where
+buttons like "Weiter" or "Senden" may sit below the fold at smaller
+viewports.
+
 ### Spectate Mode
 
 Run the integration tests with a visible browser on your desktop.  The

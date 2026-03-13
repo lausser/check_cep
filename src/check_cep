@@ -469,7 +469,6 @@ def build_podman_command(container_bin: str, container_name: str, args, env_vars
                 "--volume", f"{host_socket}:{container_runtime}/{wayland_display}:ro",
                 "--env", f"WAYLAND_DISPLAY={wayland_display}",
                 "--env", f"XDG_RUNTIME_DIR={container_runtime}",
-                "--env", "PLAYWRIGHT_BROWSER_ARGS=--enable-features=UseOzonePlatform --ozone-platform=wayland",
             ])
         else:
             display = os.environ.get("DISPLAY", ":0")

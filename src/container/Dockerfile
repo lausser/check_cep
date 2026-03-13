@@ -55,7 +55,7 @@ RUN if [ -s package-lock.json ]; then \
 # AI Tooling
 ENV GEMINI_YOLO=true \
     GEMINI_CONFIG_HOME="/home/pwuser/.gemini" \
-    PATH="/home/pwuser/node_modules/.bin:${PATH}"
+    PATH="/home/pwuser/.local/bin:/home/pwuser/node_modules/.bin:${PATH}"
 RUN if [ -n "$AI_NODE_PACKAGES" ]; then \
         mkdir -p /home/pwuser/.gemini && \
         echo "--- Installing AI Addons locally ---" && \
@@ -90,7 +90,18 @@ RUN apt-get update && apt-get install -y git && \
 USER root
 COPY image/run.py /home/pwuser/run.py
 COPY image/plugins/ /home/pwuser/plugins/
-RUN chmod 755 /home/pwuser/run.py && \
+COPY image/chrome-wrapper /tmp/chrome-wrapper
+# Replace the real Chromium binary with a wrapper that injects GPU-disable
+# and Wayland flags.  The original binary is kept as chrome.real.
+# This means ALL Playwright commands (test, codegen, etc.) get the right
+# flags without any Playwright-level config workarounds.
+RUN CHROME=$(node -e "const { chromium } = require('playwright'); console.log(chromium.executablePath())") && \
+    mv "$CHROME" "${CHROME}.real" && \
+    cp /tmp/chrome-wrapper "$CHROME" && \
+    rm /tmp/chrome-wrapper && \
+    mkdir -p /home/pwuser/.local/bin && \
+    printf '#!/bin/bash\nexec npx playwright codegen "$@"\n' > /home/pwuser/.local/bin/cep_codegen && \
+    chmod 755 /home/pwuser/run.py /home/pwuser/.local/bin/cep_codegen "$CHROME" && \
     chown -R pwuser:pwuser /home/pwuser
 
 USER pwuser

@@ -1,0 +1,27 @@
+#!/bin/bash
+# Chromium wrapper for check_cep containers.
+# Replaces the real chrome binary (renamed to chrome.real) to inject
+# flags that every container run needs.  Installed by the Dockerfile
+# after `npx playwright install`.
+
+set -euo pipefail
+
+# No GPU available in containers — force software rendering so tests
+# produce consistent screenshots across any host hardware.
+EXTRA=(
+  --disable-gpu
+  --disable-software-rasterizer
+  --disable-dev-shm-usage
+  --disable-accelerated-2d-canvas
+  --disable-accelerated-video-decode
+  --disable-accelerated-video-encode
+  --disable-gpu-compositing
+  --disable-gpu-rasterization
+  --use-gl=swiftshader
+)
+
+# Wayland display forwarding (--headed / --shell mode).
+[ -n "${WAYLAND_DISPLAY:-}" ] && \
+  EXTRA+=(--enable-features=UseOzonePlatform --ozone-platform=wayland)
+
+exec "$(dirname "$0")/chrome.real" "${EXTRA[@]}" "$@"
