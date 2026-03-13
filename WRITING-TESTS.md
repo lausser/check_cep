@@ -5,7 +5,7 @@ folder conventions, the `check-cep-vision` visual matching API,
 persistent template images, regions, click offsets, and choosing
 between DOM and vision selectors.
 
-**Prerequisite**: You have completed the [TUTORIAL.md](TUTORIAL.md) setup
+**Prerequisite**: You have completed the [README.md](README.md) setup
 (container image built, first test passing).  This handbook picks up
 where the tutorial leaves off.
 
@@ -517,7 +517,7 @@ pytest tests/integration/test_modes.py -k "tc_vision_example_form and local" -v
 
 ### Interactive Development
 
-Use `--headed --shell` for live debugging.  See [TUTORIAL.md, section 8](TUTORIAL.md)
+Use `--headed --shell` for live debugging.  See [README.md, section 8](README.md)
 for headed mode setup and usage.
 
 ### Recording Tests with Codegen
