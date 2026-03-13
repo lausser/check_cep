@@ -626,7 +626,7 @@ and writes results to `$OMD_ROOT/var/tmp/check_cep/webserver01/E2E_Login_Check/`
 
 ### Performance Data
 
-Each successful run produces these metrics in the Nagios perfdata:
+Each successful run produces by default these metrics in the Nagios perfdata:
 
 | Metric | Unit | Description |
 |--------|------|-------------|
@@ -639,6 +639,11 @@ Each successful run produces these metrics in the Nagios perfdata:
 | `podman_io_bytes_read` | B | Disk I/O read |
 | `podman_io_bytes_write` | B | Disk I/O written |
 | `podman_oom_killed` | 0/1 | Whether the container was OOM-killed |
+
+Using Playwright's `test.step()` to group actions in your test produces
+additional per-step duration metrics automatically.  See
+[WRITING-TESTS.md](WRITING-TESTS.md#structuring-tests-with-teststep)
+for details.
 
 ---
 

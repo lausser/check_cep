@@ -431,6 +431,66 @@ strategies side by side on the same page with the same assertions.
 
 ---
 
+## Structuring Tests with `test.step()`
+
+### Why Steps Matter
+
+check_cep automatically extracts performance data from Playwright's
+`steps.json` output.  When you group actions inside `test.step()`,
+each step's duration becomes a separate Nagios performance metric.
+This gives your monitoring system per-step timing data without any
+extra code.
+
+### Example
+
+```typescript
+import { test, expect } from '@playwright/test';
+
+test('checkout flow', async ({ page }) => {
+  await test.step('open product page', async () => {
+    await page.goto('https://shop.example.com/product/42');
+    await expect(page.getByRole('heading', { name: /Widget/ })).toBeVisible();
+  });
+
+  await test.step('add to cart', async () => {
+    await page.getByRole('button', { name: 'Add to cart' }).click();
+    await expect(page.getByText('Added')).toBeVisible();
+  });
+
+  await test.step('complete checkout', async () => {
+    await page.getByRole('link', { name: 'Checkout' }).click();
+    await page.getByLabel('Email').fill('test@example.com');
+    await page.getByRole('button', { name: 'Pay' }).click();
+    await expect(page.getByText('Thank you')).toBeVisible();
+  });
+});
+```
+
+### What You Get in Nagios
+
+The above test produces performance data like:
+
+```
+'TestDuration'=4523ms 'OpenProductPage'=1200ms 'AddToCart'=823ms 'CompleteCheckout'=2500ms 'duration'=7s
+```
+
+Each `test.step()` title is converted to CamelCase and reported with
+its duration in milliseconds.  The overall test duration and
+wall-clock time are always included.
+
+### Best Practices
+
+- **Name steps after business actions**, not technical details:
+  `'submit order'` rather than `'click button and wait for response'`.
+- **Keep steps coarse-grained** — one step per logical user action.
+  Too many fine-grained steps create noisy perfdata.
+- **Steps can be nested** — inner steps appear as separate metrics too,
+  so use nesting sparingly.
+- **Step names become metric labels** — keep them short and stable.
+  Renaming a step changes the metric name, which breaks dashboards.
+
+---
+
 ## Running and Debugging Tests
 
 ### How Tests Execute
