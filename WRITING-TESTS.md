@@ -758,6 +758,58 @@ pure Playwright locators.
 
 ---
 
+## Lightpanda Browser (Experimental)
+
+> **Work in progress — no guarantees.**  Lightpanda is an alternative
+> headless browser engine that promises 9x less memory and 11x faster
+> execution than Chromium for DOM-only workloads.  CDP compatibility is
+> still incomplete, so it only works for really simple web pages today.
+> If it doesn't work for your test, use Chromium (the default).
+
+### What Works
+
+Single navigation + read-only DOM queries:
+
+```typescript
+test('simple page check', async ({ page }) => {
+  await page.goto('https://example.com');
+  await expect(page.locator('h1')).toContainText('Example Domain');
+  await expect(page.locator('p').first()).toContainText('documentation examples');
+});
+```
+
+### What Does NOT Work
+
+- `page.goto()` a second time (crashes the CDP server)
+- `page.locator(sel).fill(text)` (crashes)
+- `page.locator(sel).click()` when it triggers navigation (crashes)
+- Complex or JS-heavy sites (segfault during load)
+- Vision matching (no rendering engine)
+- Headed mode (headless only)
+
+### Running with Lightpanda
+
+```bash
+python3 src/check_cep ... --browser lightpanda
+```
+
+No changes to your test files are needed — a monkey-patch redirects
+Playwright's `chromium.launch()` to Lightpanda's CDP endpoint
+transparently.
+
+### Why This Matters
+
+Should Lightpanda's CDP support mature, it could dramatically reduce
+the resource footprint of check_cep monitoring.  A Chromium container
+needs ~500 MB RAM; Lightpanda targets ~50 MB for the same DOM workload.
+For monitoring setups running dozens of browser checks, this would be
+a significant improvement.
+
+For technical details, see
+[docs/lessons-learned/005-lightpanda-browser.md](docs/lessons-learned/005-lightpanda-browser.md).
+
+---
+
 ## Worked Examples
 
 Three example fixtures demonstrate different aspects of the vision API.

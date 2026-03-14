@@ -1,8 +1,9 @@
-"""Parametrized integration tests: five fixtures × {local, s3} modes.
+"""Parametrized integration tests: fixtures × {local, s3, lightpanda} modes.
 
 Local mode tests run without any external services (SKIP_INTEGRATION is not
 required). S3 mode tests require the compose stack and are skipped when
-SKIP_INTEGRATION=1.
+SKIP_INTEGRATION=1. Lightpanda mode re-runs the DOM-only fixtures with
+--browser lightpanda (vision fixtures are skipped — no rendering engine).
 """
 import json
 import os
@@ -108,6 +109,89 @@ def test_local(
         assert meta["hostname"] == "testhost"
         assert meta["servicedescription"] == fixture_name
         assert "status" in meta
+
+
+# ---------------------------------------------------------------------------
+# Local mode — Lightpanda browser
+# ---------------------------------------------------------------------------
+# Lightpanda's CDP support is WIP: single navigation + DOM reads work,
+# but fill(), click()-navigation, and second goto() crash the server.
+# We use a dedicated fixture (tc_lp_pass) that stays within these limits.
+
+FIXTURES_LIGHTPANDA = [
+    ("tc_lp_pass", 0,    "OK -",       [],  None),
+    ("tc_syntax",  None, None,         [],  None),
+]
+
+
+@pytest.mark.parametrize(
+    "fixture_name,expected_exit,expected_prefix,extra_args,keyword",
+    FIXTURES_LIGHTPANDA,
+    ids=[f[0] for f in FIXTURES_LIGHTPANDA],
+)
+def test_local_lightpanda(
+    tmp_path,
+    omd_env,
+    write_playwright_config,
+    fixture_name,
+    expected_exit,
+    expected_prefix,
+    extra_args,
+    keyword,
+):
+    result_dir = tmp_path / "results"
+    test_dir = local_test_dir(tmp_path, fixture_name, write_playwright_config)
+
+    output, code = run_check_cep(
+        test_dir,
+        result_dir,
+        extra_args=[
+            "--host-name", "testhost",
+            "--service-description", fixture_name,
+            "--browser", "lightpanda",
+        ] + extra_args,
+        env=omd_env,
+        proc_timeout=120,
+    )
+
+    # Exit code
+    if expected_exit is None:
+        assert code in (2, 3), (
+            f"[{fixture_name}/lightpanda] Expected exit 2 or 3, got {code}.\nOutput:\n{output}"
+        )
+    else:
+        assert code == expected_exit, (
+            f"[{fixture_name}/lightpanda] Expected exit {expected_exit}, got {code}.\nOutput:\n{output}"
+        )
+
+    # Output prefix
+    if expected_prefix is None:
+        assert output.startswith(("CRITICAL -", "UNKNOWN -")), (
+            f"[{fixture_name}/lightpanda] Expected CRITICAL or UNKNOWN prefix.\nOutput:\n{output}"
+        )
+    else:
+        assert output.startswith(expected_prefix), (
+            f"[{fixture_name}/lightpanda] Expected '{expected_prefix}' prefix.\nOutput:\n{output}"
+        )
+
+    # Keyword check
+    if keyword:
+        assert keyword in output, (
+            f"[{fixture_name}/lightpanda] Expected '{keyword}' in output.\nOutput:\n{output}"
+        )
+
+    # Result artefacts
+    steps_json = result_dir / "steps.json"
+    assert steps_json.exists(), f"[{fixture_name}/lightpanda] steps.json not written"
+    data = json.loads(steps_json.read_text())
+    assert isinstance(data, dict), f"[{fixture_name}/lightpanda] steps.json is not a JSON object"
+
+    meta_json = result_dir / "test-meta.json"
+    assert meta_json.exists(), f"[{fixture_name}/lightpanda] test-meta.json not written"
+    meta = json.loads(meta_json.read_text())
+    assert meta["hostname"] == "testhost"
+    assert meta["servicedescription"] == fixture_name
+    assert "status" in meta
 
 
 # ---------------------------------------------------------------------------

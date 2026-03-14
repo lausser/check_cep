@@ -52,6 +52,16 @@ RUN if [ -s package-lock.json ]; then \
         npm install @playwright/test; \
     fi
 
+# Install Lightpanda binary to a stable system path.
+# The npm postinstall downloads the native binary to ~/.cache/lightpanda-node/.
+# Copy it to /usr/local/bin/ so it survives cache cleanup.
+RUN LPBIN="$HOME/.cache/lightpanda-node/lightpanda" && \
+    if [ -x "$LPBIN" ]; then \
+      sudo cp "$LPBIN" /usr/local/bin/lightpanda && \
+      sudo chmod 755 /usr/local/bin/lightpanda && \
+      echo "--- Lightpanda binary installed to /usr/local/bin/lightpanda ---"; \
+    fi
+
 # AI Tooling
 ENV GEMINI_YOLO=true \
     GEMINI_CONFIG_HOME="/home/pwuser/.gemini" \
@@ -90,6 +100,7 @@ RUN apt-get update && apt-get install -y git && \
 USER root
 COPY image/run.py /home/pwuser/run.py
 COPY image/plugins/ /home/pwuser/plugins/
+COPY image/patch-lightpanda.js /home/pwuser/patch-lightpanda.js
 COPY image/chrome-wrapper /tmp/chrome-wrapper
 # Replace the real Chromium binary with a wrapper that injects GPU-disable
 # and Wayland flags.  The original binary is kept as chrome.real.

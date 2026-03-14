@@ -373,6 +373,8 @@ def build_env_vars(args) -> Dict[str, str]:
     if args.headed:
         env["HEADED"] = "1"
 
+    env["BROWSER"] = args.browser
+
     # Spectate mode: pass through slow-motion and highlight timing
     for passthrough in ("CEP_VISION_HIGHLIGHT_MS", "CEP_SLOW_MO"):
         val = os.environ.get(passthrough)
@@ -647,10 +649,17 @@ def extract_output_from_steps(subjson: dict, level: int = 0, prefix: str = "") -
         if not text.startswith("NagiosPerfData:"):
             output += "\n" + text.rstrip()
 
-    for index, stderr_entry in enumerate(subjson.get("stderr", [])):
-        if index == 0:
-            output += "\n__Stderr " + prefix + "__"
-        output += "\n" + stderr_entry.get("text", "").rstrip()
+    stderr_lines = []
+    for stderr_entry in subjson.get("stderr", []):
+        text = stderr_entry.get("text", "").rstrip()
+        # [cep] lines are infrastructure messages (e.g. from patch-lightpanda.js),
+        # not real test stderr — skip them like run_playwright() does.
+        if not text.lstrip().startswith("[cep] "):
+            stderr_lines.append(text)
+    if stderr_lines:
+        output += "\n__Stderr " + prefix + "__"
+        for line in stderr_lines:
+            output += "\n" + line
         has_stderr = True
 
     for index, error in enumerate(subjson.get("errors", [])):
@@ -1078,6 +1087,9 @@ def build_argument_parser() -> ArgumentParser:
                         help="Start container with bash instead of run.py")
     parser.add_argument("--headed", action="store_true", default=False,
                         help="Run browsers in headed mode (Wayland/X11 auto-detected, debug only)")
+    parser.add_argument("--browser", default="chromium",
+                        choices=["chromium", "lightpanda"],
+                        help="Browser engine (default: chromium)")
 
     # Report URL
     parser.add_argument("--report-url", dest="report_url", default=None,
@@ -1144,6 +1156,13 @@ def main() -> int:
     containerenv = ContainerEnv()
     if not containerenv.ok:
         return nagios_exit("UNKNOWN", containerenv.failure)
+
+    # ---------------------------------------------------------------------------
+    # Browser conflict validation
+    # ---------------------------------------------------------------------------
+    if args.browser == "lightpanda" and args.headed:
+        return nagios_exit("UNKNOWN",
+                           "--headed is not supported with --browser lightpanda (headless-only browser)")
 
     # ---------------------------------------------------------------------------
     # Headed mode pre-flight

@@ -84,6 +84,8 @@ export interface VisionConstants {
 }
 
 export interface VisionApi {
+  /** Returns true when the current browser can produce screenshots (false for Lightpanda). */
+  canScreenshot(): boolean;
   locateByImage(page: any, templatePath: string, options?: VisionOptions): Promise<MatchResult>;
   waitForImage(page: any, templatePath: string, options?: VisionOptions): Promise<MatchResult>;
   existsByImage(page: any, templatePath: string, options?: VisionOptions): Promise<boolean>;

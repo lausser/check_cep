@@ -27,6 +27,18 @@ function parseHighlightMs(value) {
 
 const ENV_HIGHLIGHT_MS = parseHighlightMs(process.env.CEP_VISION_HIGHLIGHT_MS);
 
+/**
+ * Returns true when the current browser can produce screenshots.
+ *
+ * Lightpanda is a DOM-only browser with no rendering pipeline, so
+ * page.screenshot() and any image-based matching will not work.
+ * Test authors can use this to guard screenshot calls; vision functions
+ * also use it internally to fail fast or skip to DOM fallbacks.
+ */
+function canScreenshot() {
+  return process.env.BROWSER !== 'lightpanda';
+}
+
 const TERMINAL_REASONS = new Set([
   'invalid-size',
   'invalid-template',
@@ -816,9 +828,16 @@ function failureMessage(result, confidence) {
  * Locate a template once and return the full structured result.
  */
 async function locateByImage(page, templatePath, options = {}) {
+  console.error('[cep] locateByImage called: template=' + path.basename(templatePath));
+  if (!canScreenshot()) {
+    console.error('[cep] locateByImage rejected: no visual browser');
+    throw new Error('locateByImage requires a visual browser (current: lightpanda). Use DOM selectors instead.');
+  }
   const scales = options.scales ?? DEFAULT_SCALES;
   const templateBundle = await loadTemplateBundle(templatePath, scales);
-  return locateWithTemplate(page, templateBundle, options);
+  const result = await locateWithTemplate(page, templateBundle, options);
+  console.error('[cep] locateByImage result: reason=' + result.reason + (result.bestCandidate ? ' score=' + result.bestCandidate.combinedScore.toFixed(4) : ''));
+  return result;
 }
 
 /**
@@ -830,6 +849,11 @@ async function locateByImage(page, templatePath, options = {}) {
  */
 async function waitForImage(page, templatePath, options = {}) {
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  console.error('[cep] waitForImage called: template=' + path.basename(templatePath) + ' timeout=' + timeoutMs + 'ms');
+  if (!canScreenshot()) {
+    console.error('[cep] waitForImage rejected: no visual browser');
+    throw new Error('waitForImage requires a visual browser (current: lightpanda). Use DOM selectors instead.');
+  }
   const pollMs = options.pollMs ?? DEFAULT_POLL_MS;
   const scales = options.scales ?? DEFAULT_SCALES;
   const confidence = options.confidence ?? DEFAULT_CONFIDENCE;
@@ -840,13 +864,16 @@ async function waitForImage(page, templatePath, options = {}) {
   while (Date.now() - start <= timeoutMs) {
     lastResult = await locateWithTemplate(page, templateBundle, { ...options, scales });
     if (lastResult.found) {
+      console.error('[cep] waitForImage succeeded: template=' + path.basename(templatePath) + ' elapsed=' + (Date.now() - start) + 'ms');
       return lastResult;
     }
     if (isTerminalReason(lastResult.reason)) {
+      console.error('[cep] waitForImage failed (terminal): reason=' + lastResult.reason);
       throw new Error(failureMessage(lastResult, confidence));
     }
     await page.waitForTimeout(pollMs);
   }
+  console.error('[cep] waitForImage failed (timeout): reason=' + (lastResult ? lastResult.reason : 'none') + ' elapsed=' + (Date.now() - start) + 'ms');
   throw new Error(failureMessage(lastResult, confidence));
 }
 
@@ -857,11 +884,18 @@ async function waitForImage(page, templatePath, options = {}) {
  * because those are operational problems, not normal absence.
  */
 async function existsByImage(page, templatePath, options = {}) {
+  console.error('[cep] existsByImage called: template=' + path.basename(templatePath));
+  if (!canScreenshot()) {
+    console.error('[cep] existsByImage rejected: no visual browser');
+    throw new Error('existsByImage requires a visual browser (current: lightpanda). Use DOM selectors instead.');
+  }
   const result = await locateByImage(page, templatePath, options);
   if (result.found) {
+    console.error('[cep] existsByImage result: true');
     return true;
   }
   if (result.reason === 'not-found') {
+    console.error('[cep] existsByImage result: false');
     return false;
   }
   throw new Error(formatResultReason(result));
@@ -963,13 +997,16 @@ async function isVisibleLocator(locator) {
  * concise "try these visible targets" helper.
  */
 async function clickFirstVisible(candidates, options = {}) {
-  for (const locator of candidates) {
-    if (await isVisibleLocator(locator)) {
-      await highlightLocator(locator, options).catch(() => undefined);
-      await locator.first().click();
+  console.error('[cep] clickFirstVisible called: candidates=' + candidates.length);
+  for (let i = 0; i < candidates.length; i++) {
+    if (await isVisibleLocator(candidates[i])) {
+      await highlightLocator(candidates[i], options).catch(() => undefined);
+      await candidates[i].first().click();
+      console.error('[cep] clickFirstVisible succeeded: candidate index=' + i);
       return { strategy: 'dom' };
     }
   }
+  console.error('[cep] clickFirstVisible failed: no visible target');
   throw new Error('No visible click target found.');
 }
 
@@ -977,14 +1014,17 @@ async function clickFirstVisible(candidates, options = {}) {
  * Fill the first visible selector from a list of candidate selectors.
  */
 async function fillFirstVisible(page, selectors, value, options = {}) {
-  for (const selector of selectors) {
-    const locator = page.locator(selector).first();
+  console.error('[cep] fillFirstVisible called: selectors=' + selectors.length);
+  for (let i = 0; i < selectors.length; i++) {
+    const locator = page.locator(selectors[i]).first();
     if (await isVisibleLocator(locator)) {
       await highlightLocator(locator, options).catch(() => undefined);
       await locator.fill(value);
+      console.error('[cep] fillFirstVisible succeeded: selector index=' + i);
       return { strategy: 'dom' };
     }
   }
+  console.error('[cep] fillFirstVisible failed: no visible selector');
   throw new Error(`No visible selector found for value ${value}`);
 }
 
@@ -1003,11 +1043,21 @@ function visionOptions(options = {}) {
  * `typeByImage()`.
  */
 async function typeByImageOr(page, templatePath, text, selectors, options = {}) {
+  console.error('[cep] typeByImageOr called: template=' + path.basename(templatePath) + ' selectors=' + selectors.length);
+  if (!canScreenshot()) {
+    console.error('[cep] typeByImageOr skipping vision (no visual browser), using DOM fallback');
+    await fillFirstVisible(page, selectors, text, options);
+    console.error('[cep] typeByImageOr succeeded: strategy=dom');
+    return { strategy: 'dom' };
+  }
   try {
     const result = await typeByImage(page, templatePath, text, visionOptions(options));
+    console.error('[cep] typeByImageOr succeeded: strategy=vision');
     return { strategy: 'vision', result };
-  } catch {
+  } catch (err) {
+    console.error('[cep] typeByImageOr vision failed: ' + err.message + ', falling back to DOM');
     await fillFirstVisible(page, selectors, text, options);
+    console.error('[cep] typeByImageOr succeeded: strategy=dom');
     return { strategy: 'dom' };
   }
 }
@@ -1016,11 +1066,21 @@ async function typeByImageOr(page, templatePath, text, selectors, options = {}) 
  * Image-first clicking with DOM fallback.
  */
 async function clickByImageOr(page, templatePath, candidates, options = {}) {
+  console.error('[cep] clickByImageOr called: template=' + path.basename(templatePath) + ' candidates=' + candidates.length);
+  if (!canScreenshot()) {
+    console.error('[cep] clickByImageOr skipping vision (no visual browser), using DOM fallback');
+    await clickFirstVisible(candidates, options);
+    console.error('[cep] clickByImageOr succeeded: strategy=dom');
+    return { strategy: 'dom' };
+  }
   try {
     const result = await clickByImage(page, templatePath, visionOptions(options));
+    console.error('[cep] clickByImageOr succeeded: strategy=vision');
     return { strategy: 'vision', result };
-  } catch {
+  } catch (err) {
+    console.error('[cep] clickByImageOr vision failed: ' + err.message + ', falling back to DOM');
     await clickFirstVisible(candidates, options);
+    console.error('[cep] clickByImageOr succeeded: strategy=dom');
     return { strategy: 'dom' };
   }
 }
@@ -1032,8 +1092,14 @@ async function clickByImageOr(page, templatePath, candidates, options = {}) {
  * manual/reference documentation.
  */
 async function highlightByImage(page, templatePath, options = {}) {
+  console.error('[cep] highlightByImage called: template=' + path.basename(templatePath));
+  if (!canScreenshot()) {
+    console.error('[cep] highlightByImage rejected: no visual browser');
+    throw new Error('highlightByImage requires a visual browser (current: lightpanda). Use DOM selectors instead.');
+  }
   const result = await waitForImage(page, templatePath, options);
   await highlightMatchBox(page, result.bestCandidate, options);
+  console.error('[cep] highlightByImage succeeded');
   return result;
 }
 
@@ -1041,10 +1107,16 @@ async function highlightByImage(page, templatePath, options = {}) {
  * Click the best image match after waiting for it and highlighting it.
  */
 async function clickByImage(page, templatePath, options = {}) {
+  console.error('[cep] clickByImage called: template=' + path.basename(templatePath));
+  if (!canScreenshot()) {
+    console.error('[cep] clickByImage rejected: no visual browser');
+    throw new Error('clickByImage requires a visual browser (current: lightpanda). Use DOM selectors instead, or use clickByImageOr for automatic DOM fallback.');
+  }
   const result = await waitForImage(page, templatePath, options);
   await highlightMatchBox(page, result.bestCandidate, options);
   const point = offsetPoint(result.bestCandidate, options.clickOffset);
   await page.mouse.click(point.x, point.y);
+  console.error('[cep] clickByImage succeeded: strategy=vision click=(' + point.x + ',' + point.y + ')');
   return { ...result, clickPoint: point };
 }
 
@@ -1052,13 +1124,20 @@ async function clickByImage(page, templatePath, options = {}) {
  * Type text into the best image match by clicking it first.
  */
 async function typeByImage(page, templatePath, text, options = {}) {
+  console.error('[cep] typeByImage called: template=' + path.basename(templatePath));
+  if (!canScreenshot()) {
+    console.error('[cep] typeByImage rejected: no visual browser');
+    throw new Error('typeByImage requires a visual browser (current: lightpanda). Use DOM selectors instead, or use typeByImageOr for automatic DOM fallback.');
+  }
   const clicked = await clickByImage(page, templatePath, options);
   await page.keyboard.type(text);
+  console.error('[cep] typeByImage succeeded: strategy=vision');
   return clicked;
 }
 
 module.exports = {
   vision: {
+    canScreenshot,
     locateByImage,
     waitForImage,
     existsByImage,

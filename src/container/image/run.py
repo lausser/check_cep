@@ -14,6 +14,7 @@ import os
 import subprocess
 import sys
 import time
+import urllib.request
 from typing import Protocol, runtime_checkable
 
 logger = logging.getLogger("run.py")
@@ -126,7 +127,7 @@ def find_test_subdir(test_dir: str) -> str:
 # ---------------------------------------------------------------------------
 
 def run_playwright(test_dir: str, results_path: str, timeout_sec: int,
-                   headed: bool = False) -> int:
+                   headed: bool = False, browser: str = "chromium") -> int:
     """Run Playwright tests with coreutils timeout wrapping.
 
     Returns Playwright exit code.
@@ -183,16 +184,34 @@ def run_playwright(test_dir: str, results_path: str, timeout_sec: int,
         cmd += f" --config {wrapper_path}"
         logger.debug(f"Config wrapper {wrapper_path}: slowMo={slow_mo_val}")
 
+    # Always expose the browser selection to the Playwright process so test
+    # code can guard screenshot/vision calls via process.env.BROWSER.
+    env["BROWSER"] = browser
+
+    # Inject Lightpanda monkey-patch via NODE_OPTIONS
+    if browser == "lightpanda":
+        node_opts = env.get("NODE_OPTIONS", "")
+        env["NODE_OPTIONS"] = (node_opts + " --require /home/pwuser/patch-lightpanda.js").strip()
+
     logger.debug(f"Running: {cmd} in {test_dir}")
     proc = subprocess.run(cmd, shell=True, capture_output=True, cwd=test_dir, env=env)
 
-    # Print stdout/stderr for check_cep to capture
-    if proc.stdout:
-        sys.stdout.buffer.write(proc.stdout)
-        sys.stdout.buffer.flush()
-    if proc.stderr:
-        sys.stderr.buffer.write(proc.stderr)
-        sys.stderr.buffer.flush()
+    # Filter [cep] infrastructure lines from output, route to debug log.
+    # All other lines pass through unchanged to the host.
+    for stream, writer in ((proc.stdout, sys.stdout.buffer),
+                           (proc.stderr, sys.stderr.buffer)):
+        if not stream:
+            continue
+        lines = stream.split(b"\n")
+        filtered = []
+        for line in lines:
+            stripped = line.lstrip()
+            if stripped.startswith(b"[cep] "):
+                logger.debug(stripped.decode("utf-8", errors="replace"))
+            else:
+                filtered.append(line)
+        writer.write(b"\n".join(filtered))
+        writer.flush()
 
     # coreutils timeout exits 124 (SIGTERM) or 137 (SIGKILL).
     # Playwright never gets to print its own timeout message, so emit a
@@ -201,6 +220,45 @@ def run_playwright(test_dir: str, results_path: str, timeout_sec: int,
         print("PWTIMEOUT_EXCEEDED", flush=True)
 
     return proc.returncode
+
+
+# ---------------------------------------------------------------------------
+# Lightpanda CDP lifecycle
+# ---------------------------------------------------------------------------
+
+def start_lightpanda_cdp() -> subprocess.Popen:
+    """Start Lightpanda CDP server and wait until it accepts connections.
+
+    Returns the Popen handle (caller must terminate).
+    Raises RuntimeError on startup failure.
+    """
+    logger.debug("Starting Lightpanda CDP server on 127.0.0.1:9222")
+    proc = subprocess.Popen(
+        ["/usr/local/bin/lightpanda", "serve", "--host", "127.0.0.1", "--port", "9222"],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    )
+    for _ in range(30):
+        try:
+            req = urllib.request.urlopen("http://127.0.0.1:9222/json/version", timeout=1)
+            req.close()
+            logger.debug("Lightpanda CDP server ready")
+            return proc
+        except Exception:
+            time.sleep(0.2)
+    proc.kill()
+    proc.wait()
+    raise RuntimeError("Lightpanda CDP server failed to start")
+
+
+def stop_lightpanda_cdp(proc: subprocess.Popen) -> None:
+    """Terminate the Lightpanda CDP server process."""
+    logger.debug("Terminating Lightpanda process")
+    proc.terminate()
+    try:
+        proc.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait()
 
 
 # ---------------------------------------------------------------------------
@@ -220,6 +278,7 @@ def main() -> int:
     probe_location = os.environ.get("PROBE_LOCATION", "unknown")
     debug = os.environ.get("DEBUG", "")
     headed = bool(os.environ.get("HEADED", ""))
+    browser = os.environ.get("BROWSER", "chromium")
 
     # Configure logging
     if debug:
@@ -255,9 +314,23 @@ def main() -> int:
         print(f"UNKNOWN: {e}")
         return 3
 
+    # Step 2b: Start Lightpanda CDP server if requested
+    lightpanda_proc = None
+    if browser == "lightpanda":
+        try:
+            lightpanda_proc = start_lightpanda_cdp()
+        except RuntimeError as e:
+            print(f"UNKNOWN: {e}")
+            return 3
+
     # Step 3: Run Playwright from the subfolder that contains playwright.config.ts
     start_time = time.time()
-    exitcode = run_playwright(active_test_dir, results_dir, timeout_sec, headed=headed)
+    try:
+        exitcode = run_playwright(active_test_dir, results_dir, timeout_sec,
+                                  headed=headed, browser=browser)
+    finally:
+        if lightpanda_proc is not None:
+            stop_lightpanda_cdp(lightpanda_proc)
     duration = time.time() - start_time
 
     # Normalize exit codes
