@@ -6,6 +6,32 @@ available in the next container image build.
 
 ---
 
+## Spec 006 — README Visual Teaser
+
+**Branch**: `006-readme-teaser`
+
+### Added
+- 4-scene animated GIF teaser at the top of README.md: passing test, Playwright report, failing test with "Invalid credentials", error details
+- Title cards (1-second, dark background, white text) between each scene for context
+- `scripts/teaser/teaser-pass.test.ts` — passing login with `highlightLocator()` on the "Signed in as operator" result
+- `scripts/teaser/teaser-fail.test.ts` — login with "operator " (trailing space) triggers "Invalid credentials" rejection with red styling
+- `scripts/teaser/record-report.js` — records Playwright HTML report navigation inside the container
+- `scripts/generate-teaser.sh` — orchestrates 4 test/report recordings, title cards, video concatenation, and GIF conversion
+- `make teaser` target to regenerate the GIF reproducibly
+
+### Changed
+- Login fixture (`login.html`) `handleSignIn()` now validates the username — non-"operator" usernames show "Invalid credentials" in red with light-red input backgrounds
+- Pass/fail scenes are visually distinct: green "Signed in as operator" vs. red "Invalid credentials" with red-tinted input fields
+
+### How it works
+- Runs two teaser-specific tests via check_cep with Playwright video recording (`CEP_SLOW_MO=600`, `CEP_VISION_HIGHLIGHT_MS=800`)
+- Passing test enters "operator" → success. Failing test enters "operator " (trailing space) → web app rejection with red error styling
+- Records Playwright HTML report navigation via `podman run` with `record-report.js`
+- ffmpeg generates title cards, normalizes all video segments, concatenates, and converts to GIF via two-pass palette method
+- GIF parameters: 640px wide, 10 fps, 128 colors, bayer dithering — stays under 5 MB
+
+---
+
 ## Spec 005 — Lightpanda Browser Integration
 
 **Branch**: `005-lightpanda-browser`

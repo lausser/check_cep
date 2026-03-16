@@ -1,4 +1,4 @@
-.PHONY: help image test-image test-local test-all test-clean
+.PHONY: help image test-image test-local test-all test-clean teaser
 
 PLAYWRIGHT_VERSION ?= v1.58.2
 
@@ -9,6 +9,7 @@ help:
 	@echo "  test-local                        Run tests without external services (fast)"
 	@echo "  test-all                          Run full suite (requires podman-compose stack)"
 	@echo "  test-clean                        Tear down the podman-compose stack"
+	@echo "  teaser                            Generate docs/teaser.gif from a real test run"
 	@echo ""
 	@echo "Override Playwright version: make image PLAYWRIGHT_VERSION=v1.60.0"
 
@@ -33,3 +34,6 @@ test-all: test-image
 
 test-clean:
 	podman-compose -f tests/compose/docker-compose.yml down
+
+teaser: test-image
+	bash scripts/generate-teaser.sh

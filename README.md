@@ -1,5 +1,7 @@
 # check_cep Tutorial
 
+![check_cep: passing login test with vision highlights, Playwright report, failing test showing invalid credentials, and error details](docs/teaser.gif)
+
 This tutorial walks you through building the container image, writing your first
 Playwright test, and running it with `check_cep`.
 
