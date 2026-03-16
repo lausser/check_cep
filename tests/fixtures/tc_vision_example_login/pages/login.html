@@ -279,8 +279,20 @@
     function handleSignIn() {
       var username = document.getElementById('username').value;
       var password = document.getElementById('password').value;
-      document.getElementById('result').textContent =
-        'Signed in as ' + username;
+      var resultEl = document.getElementById('result');
+      var usernameInput = document.getElementById('username');
+      var passwordInput = document.getElementById('password');
+      if (username === 'operator') {
+        resultEl.textContent = 'Signed in as ' + username;
+        resultEl.style.color = '';
+        usernameInput.style.backgroundColor = '';
+        passwordInput.style.backgroundColor = '';
+      } else {
+        resultEl.textContent = 'Invalid credentials';
+        resultEl.style.color = '#d32f2f';
+        usernameInput.style.backgroundColor = '#ffebee';
+        passwordInput.style.backgroundColor = '#ffebee';
+      }
       document.body.setAttribute('data-submitted', 'true');
     }
   </script>
