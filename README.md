@@ -44,95 +44,12 @@ grep -q io /sys/fs/cgroup/user.slice/cgroup.subtree_control && echo "io: OK" || 
 
 Then log in as `cep` in a **new SSH session** (not `su`) and run a test check.
 
+> **Want to understand *why* each step is needed?** See [Appendix A — Rootless
+> Podman Internals](#appendix-a--rootless-podman-internals) at the end of this
+> document for a deep dive into user namespaces, systemd linger, and cgroup
+> controller delegation.
+
 ---
-
-#### Technical Background (for the seasoned systemd admin)
-
-Three separate Linux subsystems must cooperate for rootless Podman to work
-correctly as an OMD site user. Each prerequisite fixes a failure in a different
-layer of the stack.
-
-**1. User namespaces and subordinate ID maps**
-
-Rootless Podman isolates containers using Linux user namespaces
-(`clone(CLONE_NEWUSER)`). Inside the container, processes appear to run as a
-range of UIDs (root at UID 0, `pwuser` at UID 1000, etc.). On the host these
-map to a contiguous block of *subordinate* UIDs owned by the site user.
-
-The kernel learns about this mapping from `/etc/subuid` and `/etc/subgid`.
-`usermod --add-subuids` appends the entry. `newuidmap(1)` and `newgidmap(1)`
-(setuid helpers, part of `shadow-utils`) then write the actual
-`/proc/self/uid_map` inside the new namespace. Without a subuid entry the
-kernel refuses the `uid_map` write and Podman aborts before the container
-even starts.
-
-The range `100000–165535` (65536 entries) is the conventional default. It is
-wide enough to map a full 16-bit UID space inside the container and avoids
-collisions with real system UIDs (< 1000) and typical user UIDs (1000–60000).
-
-**2. Systemd linger and the user session unit**
-
-Podman's cgroup v2 support relies on the *systemd user bus*
-(`/run/user/UID/bus`), which is only available when `user@UID.service` is
-running. Normally systemd starts this unit when the user opens a session and
-stops it when the last session ends.
-
-`loginctl enable-linger cep` creates a marker in `/var/lib/systemd/linger/`
-that causes `systemd-logind` to start `user@UID.service` at boot and keep it
-alive indefinitely — regardless of whether the user is logged in. Without
-linger, a Naemon check running as `cep` via `sudo -u cep` or `su -s /bin/sh`
-has no systemd session, Podman falls back to the raw `cgroupfs` driver, and
-cgroup v2 resource tracking is unreliable.
-
-**3. Cgroup controller delegation and io.stat**
-
-This is the subtlest of the three. Cgroup v2 uses a *controller delegation*
-model: a parent cgroup explicitly lists which resource controllers it passes
-down to children by writing to `cgroup.subtree_control`. A controller that is
-not listed there is simply absent from all descendant cgroups — the
-corresponding pseudo-files (`io.stat`, `cpu.stat`, etc.) do not exist.
-
-The delegation chain for the site user looks like this:
-
-```
-/sys/fs/cgroup/                         ← root cgroup (kernel-managed)
-  └── user.slice/                        ← all user sessions
-        └── user-999.slice/              ← sessions for uid 999 (cep)
-              └── user@999.service/      ← the user manager itself
-                    └── app.slice/       ← transient container cgroups land here
-                          └── libpod-<ID>.scope/
-```
-
-Systemd reads `Delegate=` from the unit file and writes those controller names
-into `cgroup.subtree_control` when it starts the unit. The stock
-`user@.service` in most distributions ships with:
-
-```
-Delegate=pids memory cpu
-```
-
-This is intentionally conservative — `io` throttling interacts with the block
-layer and can degrade I/O performance if misused, so upstream chose not to
-delegate it by default.
-
-The consequence: `io.stat` does not exist anywhere in the
-`user-999.slice/` subtree, so `check_cep`'s cgroup polling thread finds no
-file to read and sets `podman_metric_collection_failed=1`.
-
-The drop-in `/etc/systemd/system/user@.service.d/delegate.conf` overrides the
-`Delegate=` line for every user session on the host. After
-`systemctl daemon-reload` + `systemctl restart user@999.service`, systemd
-writes `cpuset cpu io memory pids` into
-`/sys/fs/cgroup/user.slice/cgroup.subtree_control` and propagates it down the
-slice tree, making `io.stat` available inside every container cgroup created
-under that user session.
-
-Note that `Delegate=` is *additive across drop-ins* only within a single
-`[Service]` section — it does **not** merge with the base file. The drop-in
-must therefore list the complete desired set, not just `io`.
-
-`cpuset` is included so that Podman can honour CPU-pinning requests
-(`--cpuset-cpus`); it is a no-op if unused.
 
 ## 1. Build the Container Image
 
@@ -816,3 +733,93 @@ tests/
     ├── test_collision.py           # Concurrent duplicate detection
     └── test_loki.py                # Loki log forwarding
 ```
+
+---
+
+## Appendix A — Rootless Podman Internals
+
+Three separate Linux subsystems must cooperate for rootless Podman to work
+correctly as an OMD site user. Each prerequisite fixes a failure in a different
+layer of the stack.
+
+### 1. User namespaces and subordinate ID maps
+
+Rootless Podman isolates containers using Linux user namespaces
+(`clone(CLONE_NEWUSER)`). Inside the container, processes appear to run as a
+range of UIDs (root at UID 0, `pwuser` at UID 1000, etc.). On the host these
+map to a contiguous block of *subordinate* UIDs owned by the site user.
+
+The kernel learns about this mapping from `/etc/subuid` and `/etc/subgid`.
+`usermod --add-subuids` appends the entry. `newuidmap(1)` and `newgidmap(1)`
+(setuid helpers, part of `shadow-utils`) then write the actual
+`/proc/self/uid_map` inside the new namespace. Without a subuid entry the
+kernel refuses the `uid_map` write and Podman aborts before the container
+even starts.
+
+The range `100000–165535` (65536 entries) is the conventional default. It is
+wide enough to map a full 16-bit UID space inside the container and avoids
+collisions with real system UIDs (< 1000) and typical user UIDs (1000–60000).
+
+### 2. Systemd linger and the user session unit
+
+Podman's cgroup v2 support relies on the *systemd user bus*
+(`/run/user/UID/bus`), which is only available when `user@UID.service` is
+running. Normally systemd starts this unit when the user opens a session and
+stops it when the last session ends.
+
+`loginctl enable-linger cep` creates a marker in `/var/lib/systemd/linger/`
+that causes `systemd-logind` to start `user@UID.service` at boot and keep it
+alive indefinitely — regardless of whether the user is logged in. Without
+linger, a Naemon check running as `cep` via `sudo -u cep` or `su -s /bin/sh`
+has no systemd session, Podman falls back to the raw `cgroupfs` driver, and
+cgroup v2 resource tracking is unreliable.
+
+### 3. Cgroup controller delegation and io.stat
+
+This is the subtlest of the three. Cgroup v2 uses a *controller delegation*
+model: a parent cgroup explicitly lists which resource controllers it passes
+down to children by writing to `cgroup.subtree_control`. A controller that is
+not listed there is simply absent from all descendant cgroups — the
+corresponding pseudo-files (`io.stat`, `cpu.stat`, etc.) do not exist.
+
+The delegation chain for the site user looks like this:
+
+```
+/sys/fs/cgroup/                         ← root cgroup (kernel-managed)
+  └── user.slice/                        ← all user sessions
+        └── user-999.slice/              ← sessions for uid 999 (cep)
+              └── user@999.service/      ← the user manager itself
+                    └── app.slice/       ← transient container cgroups land here
+                          └── libpod-<ID>.scope/
+```
+
+Systemd reads `Delegate=` from the unit file and writes those controller names
+into `cgroup.subtree_control` when it starts the unit. The stock
+`user@.service` in most distributions ships with:
+
+```
+Delegate=pids memory cpu
+```
+
+This is intentionally conservative — `io` throttling interacts with the block
+layer and can degrade I/O performance if misused, so upstream chose not to
+delegate it by default.
+
+The consequence: `io.stat` does not exist anywhere in the
+`user-999.slice/` subtree, so `check_cep`'s cgroup polling thread finds no
+file to read and sets `podman_metric_collection_failed=1`.
+
+The drop-in `/etc/systemd/system/user@.service.d/delegate.conf` overrides the
+`Delegate=` line for every user session on the host. After
+`systemctl daemon-reload` + `systemctl restart user@999.service`, systemd
+writes `cpuset cpu io memory pids` into
+`/sys/fs/cgroup/user.slice/cgroup.subtree_control` and propagates it down the
+slice tree, making `io.stat` available inside every container cgroup created
+under that user session.
+
+Note that `Delegate=` is *additive across drop-ins* only within a single
+`[Service]` section — it does **not** merge with the base file. The drop-in
+must therefore list the complete desired set, not just `io`.
+
+`cpuset` is included so that Podman can honour CPU-pinning requests
+(`--cpuset-cpus`); it is a no-op if unused.
