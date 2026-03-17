@@ -1135,6 +1135,215 @@ async function typeByImage(page, templatePath, text, options = {}) {
   return clicked;
 }
 
+/**
+ * Shared preparation for best-effort interaction functions.
+ *
+ * Resolves the locator to the first matching element, waits for visibility,
+ * optionally scrolls into view, and optionally highlights the target.
+ */
+async function prepareTarget(locator, options = {}) {
+  const target = locator.first();
+  await target.waitFor({ state: 'visible', timeout: 5000 });
+
+  if (options.scrollIntoView !== false && canScreenshot()) {
+    try {
+      if (process.env.DEBUG) {
+        console.error('[cep] prepareTarget scroll: attempting');
+      }
+      await target.evaluate((element) => {
+        element.scrollIntoView({ block: 'center', inline: 'center' });
+      });
+      if (process.env.DEBUG) {
+        console.error('[cep] prepareTarget scroll: succeeded');
+      }
+    } catch (e) {
+      if (process.env.DEBUG) {
+        console.error('[cep] prepareTarget scroll: failed (' + e.message + ')');
+      }
+    }
+  }
+
+  if (canScreenshot() && (options.highlightMs || ENV_HIGHLIGHT_MS)) {
+    try {
+      await highlightLocator(target, options);
+    } catch {
+      // Highlight failure must not block the interaction.
+    }
+  }
+
+  return target;
+}
+
+/**
+ * Click an element using a progressive fallback strategy.
+ *
+ * By default, the target is scrolled into view before clicking. The scroll
+ * step is silently skipped on Lightpanda or when scrollIntoView is false.
+ * Fallback chain: standard click → forced click → DOM-level click.
+ */
+async function clickBestEffort(locator, options = {}) {
+  console.error('[cep] clickBestEffort called');
+  const target = await prepareTarget(locator, options);
+
+  try {
+    await target.click();
+    if (process.env.DEBUG) {
+      console.error('[cep] clickBestEffort click: succeeded');
+    }
+    console.error('[cep] clickBestEffort succeeded');
+    return { strategy: 'dom' };
+  } catch (e) {
+    if (process.env.DEBUG) {
+      console.error('[cep] clickBestEffort click: failed (' + e.message + ')');
+    }
+  }
+
+  try {
+    await target.click({ force: true });
+    if (process.env.DEBUG) {
+      console.error('[cep] clickBestEffort click({force}): succeeded');
+    }
+    console.error('[cep] clickBestEffort succeeded');
+    return { strategy: 'dom' };
+  } catch (e) {
+    if (process.env.DEBUG) {
+      console.error('[cep] clickBestEffort click({force}): failed (' + e.message + ')');
+    }
+  }
+
+  try {
+    await target.evaluate((el) => { el.click(); });
+    if (process.env.DEBUG) {
+      console.error('[cep] clickBestEffort evaluate(click): succeeded');
+    }
+    console.error('[cep] clickBestEffort succeeded');
+    return { strategy: 'dom' };
+  } catch (e) {
+    if (process.env.DEBUG) {
+      console.error('[cep] clickBestEffort evaluate(click): failed (' + e.message + ')');
+    }
+  }
+
+  console.error('[cep] clickBestEffort failed: all strategies exhausted');
+  throw new Error('clickBestEffort: all click strategies failed (tried: click, click({force}), evaluate(click))');
+}
+
+/**
+ * Type text into an element using a progressive fallback strategy.
+ *
+ * Fallback chain: click + type → forced click + type → DOM-level focus + value set.
+ */
+async function typeBestEffort(locator, text, options = {}) {
+  console.error('[cep] typeBestEffort called');
+  const target = await prepareTarget(locator, options);
+
+  try {
+    await target.click();
+    await target.type(text);
+    if (process.env.DEBUG) {
+      console.error('[cep] typeBestEffort click+type: succeeded');
+    }
+    console.error('[cep] typeBestEffort succeeded');
+    return { strategy: 'dom' };
+  } catch (e) {
+    if (process.env.DEBUG) {
+      console.error('[cep] typeBestEffort click+type: failed (' + e.message + ')');
+    }
+  }
+
+  try {
+    await target.click({ force: true });
+    await target.type(text);
+    if (process.env.DEBUG) {
+      console.error('[cep] typeBestEffort click({force})+type: succeeded');
+    }
+    console.error('[cep] typeBestEffort succeeded');
+    return { strategy: 'dom' };
+  } catch (e) {
+    if (process.env.DEBUG) {
+      console.error('[cep] typeBestEffort click({force})+type: failed (' + e.message + ')');
+    }
+  }
+
+  try {
+    await target.evaluate((el, t) => {
+      el.focus();
+      el.value = t;
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+    }, text);
+    if (process.env.DEBUG) {
+      console.error('[cep] typeBestEffort evaluate(focus+value): succeeded');
+    }
+    console.error('[cep] typeBestEffort succeeded');
+    return { strategy: 'dom' };
+  } catch (e) {
+    if (process.env.DEBUG) {
+      console.error('[cep] typeBestEffort evaluate(focus+value): failed (' + e.message + ')');
+    }
+  }
+
+  console.error('[cep] typeBestEffort failed: all strategies exhausted');
+  throw new Error('typeBestEffort: all type strategies failed (tried: click+type, click({force})+type, evaluate(focus+value))');
+}
+
+/**
+ * Fill a form field using a progressive fallback strategy.
+ *
+ * Fallback chain: fill → click + fill → DOM-level focus + value set + events.
+ */
+async function fillBestEffort(locator, value, options = {}) {
+  console.error('[cep] fillBestEffort called');
+  const target = await prepareTarget(locator, options);
+
+  try {
+    await target.fill(value);
+    if (process.env.DEBUG) {
+      console.error('[cep] fillBestEffort fill: succeeded');
+    }
+    console.error('[cep] fillBestEffort succeeded');
+    return { strategy: 'dom' };
+  } catch (e) {
+    if (process.env.DEBUG) {
+      console.error('[cep] fillBestEffort fill: failed (' + e.message + ')');
+    }
+  }
+
+  try {
+    await target.click();
+    await target.fill(value);
+    if (process.env.DEBUG) {
+      console.error('[cep] fillBestEffort click+fill: succeeded');
+    }
+    console.error('[cep] fillBestEffort succeeded');
+    return { strategy: 'dom' };
+  } catch (e) {
+    if (process.env.DEBUG) {
+      console.error('[cep] fillBestEffort click+fill: failed (' + e.message + ')');
+    }
+  }
+
+  try {
+    await target.evaluate((el, v) => {
+      el.focus();
+      el.value = v;
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+      el.dispatchEvent(new Event('change', { bubbles: true }));
+    }, value);
+    if (process.env.DEBUG) {
+      console.error('[cep] fillBestEffort evaluate(focus+value+events): succeeded');
+    }
+    console.error('[cep] fillBestEffort succeeded');
+    return { strategy: 'dom' };
+  } catch (e) {
+    if (process.env.DEBUG) {
+      console.error('[cep] fillBestEffort evaluate(focus+value+events): failed (' + e.message + ')');
+    }
+  }
+
+  console.error('[cep] fillBestEffort failed: all strategies exhausted');
+  throw new Error('fillBestEffort: all fill strategies failed (tried: fill, click+fill, evaluate(focus+value+events))');
+}
+
 module.exports = {
   vision: {
     canScreenshot,
@@ -1150,6 +1359,9 @@ module.exports = {
     typeByImageOr,
     clickByImage,
     typeByImage,
+    clickBestEffort,
+    typeBestEffort,
+    fillBestEffort,
     constants: {
       DEFAULT_CONFIDENCE,
       DEFAULT_TIMEOUT_MS,

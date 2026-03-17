@@ -36,8 +36,9 @@ ENV NODE_PATH=/home/pwuser/node_modules \
     PLAYWRIGHT_HTML_OUTPUT_DIR=/home/pwuser/playwright-report \
     NODE_OPTIONS="--max-http-header-size=120480"
 
-# Copy vision helper module (before npm install so local file: dep resolves)
+# Copy local helper modules (before npm install so local file: deps resolve)
 COPY --chown=pwuser:pwuser check-cep-vision/ ./check-cep-vision/
+COPY --chown=pwuser:pwuser check-cep-helpers/ ./check-cep-helpers/
 
 # Optional npm dependencies: replace the zero-byte package.json and
 # package-lock.json in src/container/ with real ones to bake npm deps into the image.

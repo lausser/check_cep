@@ -27,6 +27,7 @@ export interface VisionOptions {
   highlightMs?: number;
   highlightColor?: string;
   highlightFillColor?: string;
+  scrollIntoView?: boolean;
 }
 
 export interface MatchCandidate {
@@ -98,6 +99,9 @@ export interface VisionApi {
   typeByImageOr(page: any, templatePath: string, text: string, selectors: string[], options?: VisionOptions): Promise<StrategyResult>;
   clickByImage(page: any, templatePath: string, options?: VisionOptions): Promise<ClickResult>;
   typeByImage(page: any, templatePath: string, text: string, options?: VisionOptions): Promise<ClickResult>;
+  clickBestEffort(locator: any, options?: VisionOptions): Promise<{ strategy: 'dom' }>;
+  typeBestEffort(locator: any, text: string, options?: VisionOptions): Promise<{ strategy: 'dom' }>;
+  fillBestEffort(locator: any, value: string, options?: VisionOptions): Promise<{ strategy: 'dom' }>;
   constants: VisionConstants;
 }
 
