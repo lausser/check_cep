@@ -6,6 +6,26 @@ available in the next container image build.
 
 ---
 
+## Spec 007 — Vision Autoscroll (Best-Effort Interaction Functions)
+
+**Branch**: `007-vision-autoscroll`
+
+### Added
+- `vision.clickBestEffort(locator, options?)` — scroll into view + click with progressive fallback (standard → forced → DOM-level)
+- `vision.typeBestEffort(locator, text, options?)` — scroll into view + type with progressive fallback
+- `vision.fillBestEffort(locator, value, options?)` — scroll into view + fill with progressive fallback
+- `scrollIntoView` option (default: `true`) to opt out of automatic scrolling when needed
+- Transparent Lightpanda compatibility: scroll step silently skipped on DOM-only browsers
+- Debug logging for individual fallback steps when `--debug` is active (`process.env.DEBUG`)
+- TypeScript declarations for all three new functions and the `scrollIntoView` option
+- `check-cep-helpers` npm package bundled in the container — shared test utilities (`cepLog`, `cepLogLocated`, `cepLogFound`, `cepLogType`, `cepLogPress`, `cepLogWait`, `cepLogUrl`) for timestamped Playwright test logging
+
+### Changed
+- Existing migrated testcases refactored to use centralized bestEffort functions, replacing duplicated local `clickWithFallback` helpers and ad-hoc `scrollIntoView` evaluate calls
+- Logging helpers extracted from 7 testcase-local `functions/index.ts` files into `check-cep-helpers`, eliminating identical copies of `cepLog` and its derivatives
+
+---
+
 ## Spec 006 — README Visual Teaser
 
 **Branch**: `006-readme-teaser`

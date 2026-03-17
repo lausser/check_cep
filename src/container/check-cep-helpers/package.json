@@ -1,0 +1,8 @@
+{
+  "name": "check-cep-helpers",
+  "version": "1.0.0",
+  "main": "index.js",
+  "types": "index.d.ts",
+  "private": true,
+  "description": "Shared test utilities for check_cep Playwright tests"
+}
