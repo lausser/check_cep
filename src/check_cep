@@ -6,7 +6,8 @@ Host-side orchestrator: translates CLI arguments to container env vars and volum
 mounts, runs the container, parses results, and produces Nagios-compatible output.
 """
 
-from argparse import ArgumentParser
+from argparse import ArgumentParser, ArgumentTypeError
+from dataclasses import dataclass, field
 import io
 import json
 import logging
@@ -21,7 +22,7 @@ import time
 import unicodedata
 import urllib.parse
 from logging.handlers import RotatingFileHandler
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Protocol, Tuple
 
 logger = logging.getLogger("check_cep")
 
@@ -208,9 +209,13 @@ def derive_testident(hostname: str, servicedescription: str) -> str:
     return urllib.parse.quote(f"{hostname}__{servicedescription}", safe="")
 
 
-def resolve_path_template(template: str, hostname: str, servicedescription: str) -> str:
-    """Replace %h and %s template variables in path strings."""
-    return template.replace("%h", hostname).replace("%s", servicedescription)
+def resolve_path_template(template: str, hostname: str, servicedescription: str,
+                          started: str = "") -> str:
+    """Replace %h, %s, and %t template variables in path strings."""
+    result = template.replace("%h", hostname).replace("%s", servicedescription)
+    if started:
+        result = result.replace("%t", started)
+    return result
 
 
 def sanitize_container_name(testname: str) -> str:
@@ -349,10 +354,120 @@ def setup_x11_access() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Report cleanup (009-report-management)
+# ---------------------------------------------------------------------------
+
+@dataclass
+class CleanupResult:
+    deleted: List[str] = field(default_factory=list)
+    skipped: List[str] = field(default_factory=list)
+    failed: List[Tuple[str, Exception]] = field(default_factory=list)
+
+
+class ReportCleanupPlugin(Protocol):
+    def list_candidates(
+        self,
+        parent_dir: str,
+        current_run_dir: str,
+        retention_seconds: int,
+    ) -> List[dict]: ...
+
+    def delete_candidate(self, candidate: dict) -> None: ...
+
+
+class LocalCleanup:
+    """Local filesystem implementation of ReportCleanupPlugin."""
+
+    def list_candidates(
+        self,
+        parent_dir: str,
+        current_run_dir: str,
+        retention_seconds: int,
+    ) -> List[dict]:
+        """Return eligible run directories sorted oldest-first."""
+        candidates = []
+        now = time.time()
+        try:
+            with os.scandir(parent_dir) as it:
+                for entry in it:
+                    if not entry.is_dir():
+                        continue
+                    if not re.fullmatch(r"\d+", entry.name):
+                        continue
+                    meta_path = os.path.join(entry.path, "test-meta.json")
+                    if not os.path.exists(meta_path):
+                        continue
+                    started = int(entry.name)
+                    if now - started <= retention_seconds:
+                        continue
+                    if entry.path == current_run_dir:
+                        continue
+                    candidates.append({"path": entry.path, "started": started})
+        except OSError as e:
+            logger.warning(f"LocalCleanup.list_candidates failed to scan {parent_dir}: {e}")
+        candidates.sort(key=lambda c: c["started"])
+        return candidates
+
+    def delete_candidate(self, candidate: dict) -> None:
+        """Delete a single candidate run directory."""
+        shutil.rmtree(candidate["path"])
+
+
+def parse_retention(value: str) -> int:
+    """Parse a retention string like '24h' into seconds.
+
+    Raises ArgumentTypeError on invalid input.
+    """
+    if not value.endswith("h"):
+        raise ArgumentTypeError(
+            f"retention value must end with 'h' (e.g. 24h), got: {value!r}"
+        )
+    prefix = value[:-1]
+    try:
+        hours = int(prefix)
+    except ValueError:
+        raise ArgumentTypeError(
+            f"retention value must be a positive integer followed by 'h', got: {value!r}"
+        )
+    if hours < 1:
+        raise ArgumentTypeError(
+            f"retention must be >= 1h, got: {value!r}"
+        )
+    return hours * 3600
+
+
+def run_cleanup(
+    plugin: ReportCleanupPlugin,
+    parent_dir: str,
+    current_run_dir: str,
+    retention_seconds: int,
+    timeout_deadline: float,
+) -> CleanupResult:
+    """Delete eligible old run directories oldest-first within the timeout budget."""
+    safety_margin = 10.0
+    result = CleanupResult()
+    if time.time() > timeout_deadline - safety_margin:
+        logger.debug("run_cleanup: skipping, insufficient time remaining before deadline")
+        return result
+    candidates = plugin.list_candidates(parent_dir, current_run_dir, retention_seconds)
+    for candidate in candidates:
+        if time.time() > timeout_deadline - safety_margin:
+            result.skipped.append(candidate["path"])
+            continue
+        try:
+            plugin.delete_candidate(candidate)
+            result.deleted.append(candidate["path"])
+        except Exception as exc:
+            result.failed.append((candidate["path"], exc))
+            logger.debug(f"run_cleanup: failed to delete {candidate['path']}: {exc}")
+    return result
+
+
+# ---------------------------------------------------------------------------
 # Container environment variable assembly (T007)
 # ---------------------------------------------------------------------------
 
-def build_env_vars(args) -> Dict[str, str]:
+def build_env_vars(args, started_str: str = "") -> Dict[str, str]:
     """Build container environment variable dict from CLI args."""
     env = {
         "TEST_SOURCE": args.test_source,
@@ -365,6 +480,7 @@ def build_env_vars(args) -> Dict[str, str]:
         "TESTIDENT": derive_testident(args.host_name, args.service_description),
         "TERM": "dumb",
         "FORCE_COLOR": "false",
+        "CEP_STARTED": started_str,
     }
 
     if args.debug:
@@ -416,8 +532,12 @@ def build_env_vars(args) -> Dict[str, str]:
 # Podman command building (T008)
 # ---------------------------------------------------------------------------
 
-def build_podman_command(container_bin: str, container_name: str, args, env_vars: Dict[str, str]) -> List[str]:
-    """Build complete podman run command."""
+def build_podman_command(container_bin: str, container_name: str, args, env_vars: Dict[str, str],
+                         result_dir: str) -> List[str]:
+    """Build complete podman run command.
+
+    result_dir: already-resolved host path to mount as /home/pwuser/results.
+    """
     cgroup_parent = container_name.replace("-", "_") + ".slice"
 
     cmd = [
@@ -446,7 +566,6 @@ def build_podman_command(container_bin: str, container_name: str, args, env_vars
     hostname = args.host_name
     servicedescription = args.service_description
     test_dir = resolve_path_template(args.test_dir, hostname, servicedescription)
-    result_dir = resolve_path_template(args.result_dir, hostname, servicedescription)
 
     if args.test_source == "local":
         cmd.extend(["--volume", f"{os.path.abspath(test_dir)}:/home/pwuser/tests:ro,z"])
@@ -1069,7 +1188,11 @@ def build_argument_parser() -> ArgumentParser:
                         help="Host-side test scripts directory (supports %%h, %%s)")
     parser.add_argument("--result-dir", dest="result_dir",
                         default=omd_root + "/var/tmp/check_cep/%h/%s",
-                        help="Host-side results directory (supports %%h, %%s)")
+                        help="Host-side results directory (supports %%h, %%s, %%t for per-run timestamped dirs)")
+    parser.add_argument("--report-retention", dest="report_retention",
+                        default=None, type=parse_retention,
+                        help="Delete reports older than this duration after each run "
+                             "(e.g. 24h, 168h). Requires %%t in --result-dir.")
     parser.add_argument("--testscripts-cache", dest="testscripts_cache",
                         default=omd_root + "/var/tmp/testscripts_cache",
                         help="Cache directory for S3 test scripts")
@@ -1128,6 +1251,10 @@ def main() -> int:
     parser = build_argument_parser()
     args = parser.parse_args()
 
+    # Capture process start time before any path resolution so %t is available
+    start_time = time.time()
+    started_str = str(int(start_time))
+
     # ---------------------------------------------------------------------------
     # Logging setup (T032)
     # ---------------------------------------------------------------------------
@@ -1182,7 +1309,7 @@ def main() -> int:
     testname = derive_testname(hostname, servicedescription)
     testident = derive_testident(hostname, servicedescription)
     container_name = sanitize_container_name(testname)
-    result_dir = resolve_path_template(args.result_dir, hostname, servicedescription)
+    result_dir = resolve_path_template(args.result_dir, hostname, servicedescription, started=started_str)
 
     # ---------------------------------------------------------------------------
     # PID file concurrency check (T015)
@@ -1217,7 +1344,9 @@ def main() -> int:
                 except OSError:
                     pass
 
-    pid_file = os.path.join(result_dir, f"running_{testident}")
+    omd_tmp = os.path.join(omd_root or "/tmp", "var", "tmp")
+    os.makedirs(omd_tmp, mode=PERM_WORLD_RWX, exist_ok=True)
+    pid_file = os.path.join(omd_tmp, f"check_cep.{testident}.pid")
     existing_pid = check_pid_file(pid_file)
     if existing_pid is not None:
         return nagios_exit("UNKNOWN", f"test {servicedescription} duplicate, "
@@ -1233,9 +1362,8 @@ def main() -> int:
     # ---------------------------------------------------------------------------
     # Build and execute container (T007, T008, T017)
     # ---------------------------------------------------------------------------
-    start_time = time.time()
-    env_vars = build_env_vars(args)
-    cmd = build_podman_command(containerenv.container_bin, container_name, args, env_vars)
+    env_vars = build_env_vars(args, started_str)
+    cmd = build_podman_command(containerenv.container_bin, container_name, args, env_vars, result_dir)
 
     # Start cgroup poller (T027)
     cgroup_poller = None
@@ -1243,13 +1371,14 @@ def main() -> int:
         cgroup_poller = CgroupPoller(container_name, DEFAULT_CPU_COUNT)
         cgroup_poller.start()
 
+    container_start_time = time.time()
     stdout, stderr, returncode = execute_container(cmd, shell_mode=args.shell)
 
     # Stop cgroup poller
     if cgroup_poller:
         cgroup_poller.stop()
 
-    wall_duration = int(time.time() - start_time)
+    wall_duration = int(time.time() - container_start_time)
 
     # Cleanup PID file
     remove_pid_file(pid_file)
@@ -1349,7 +1478,24 @@ def main() -> int:
     s3_failed = check_s3_upload_failure(stdout_str, stderr_str)
     duplicate = check_duplicate_container(stderr_str)
 
-    # Read test-meta.json for timestamp (for report URL)
+    # ---------------------------------------------------------------------------
+    # Report cleanup (US2, US3 — 009-report-management)
+    # ---------------------------------------------------------------------------
+    if args.report_retention is not None and "%t" in args.result_dir:
+        timeout_deadline = start_time + args.timeout
+        parent_dir = os.path.dirname(result_dir)
+        cleanup_plugin = LocalCleanup()
+        cleanup_result = run_cleanup(
+            cleanup_plugin, parent_dir, result_dir,
+            args.report_retention, timeout_deadline,
+        )
+        logger.debug(
+            f"Cleanup: deleted={cleanup_result.deleted}, "
+            f"skipped={cleanup_result.skipped}, "
+            f"failed={[(p, str(e)) for p, e in cleanup_result.failed]}"
+        )
+
+    # Read test-meta.json for started timestamp (for report URL)
     test_meta = {}
     meta_path = os.path.join(result_dir, "test-meta.json")
     if os.path.exists(meta_path):
@@ -1362,7 +1508,7 @@ def main() -> int:
     # Build report annotation (T024)
     annotation = ""
     if args.report_url:
-        timestamp = test_meta.get("timestamp", str(int(time.time())))
+        timestamp = test_meta.get("started", started_str)
         resolved_url = resolve_report_url(
             args.report_url, hostname, servicedescription, testident,
             args.probe_location, args.s3_report_bucket or "", timestamp)
@@ -1392,6 +1538,10 @@ def main() -> int:
     # S3 failure appended as warning text (doesn't change exit code)
     if s3_failed:
         print("REPORT UPLOAD TO S3 FAILED")
+
+    # Retention warning (FR-017): --report-retention without %t in --result-dir
+    if args.report_retention is not None and "%t" not in args.result_dir:
+        print("WARNING: --report-retention has no effect without %t in --result-dir")
 
     return exit_code
 

@@ -54,13 +54,26 @@ RUN if [ -s package-lock.json ]; then \
     fi
 
 # Install Lightpanda binary to a stable system path.
-# The npm postinstall downloads the native binary to ~/.cache/lightpanda-node/.
-# Copy it to /usr/local/bin/ so it survives cache cleanup.
+# The npm postinstall downloads the binary from the nightly GitHub release, but
+# it also calls the GitHub API to verify the checksum, which often fails during
+# Docker builds due to rate limits.  Bypass this by downloading the binary
+# directly from the well-known nightly release URL whenever the npm cache is empty.
 RUN LPBIN="$HOME/.cache/lightpanda-node/lightpanda" && \
+    ARCH=$(uname -m) && \
+    LP_URL="https://github.com/lightpanda-io/browser/releases/download/nightly/lightpanda-${ARCH}-linux" && \
     if [ -x "$LPBIN" ]; then \
       sudo cp "$LPBIN" /usr/local/bin/lightpanda && \
       sudo chmod 755 /usr/local/bin/lightpanda && \
-      echo "--- Lightpanda binary installed to /usr/local/bin/lightpanda ---"; \
+      echo "--- Lightpanda binary installed from npm cache ---"; \
+    else \
+      echo "--- npm postinstall did not cache binary; fetching ${LP_URL} ---" && \
+      if curl -fsSL --retry 3 -o /tmp/lightpanda "$LP_URL"; then \
+        chmod +x /tmp/lightpanda && \
+        sudo cp /tmp/lightpanda /usr/local/bin/lightpanda && \
+        echo "--- Lightpanda binary installed to /usr/local/bin/lightpanda ---"; \
+      else \
+        echo "--- WARNING: Lightpanda binary unavailable; lightpanda browser type will not work ---"; \
+      fi; \
     fi
 
 # AI Tooling

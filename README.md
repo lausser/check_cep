@@ -214,7 +214,8 @@ cat /tmp/my-first-results/test-meta.json
 
 ```json
 {
-    "timestamp": "1772635413",
+    "started": "1772635407",
+    "finished": "1772635413",
     "hostname": "testhost",
     "servicedescription": "Consol_Homepage",
     "exitcode": 0,
@@ -224,11 +225,45 @@ cat /tmp/my-first-results/test-meta.json
 }
 ```
 
+Both `started` and `finished` are Unix epoch integer strings. `started` reflects
+the host-side `check_cep` process start time; `finished` is when the container
+wrote the file. The directory name matches `started` when `%t` is used.
+
 ### Inspect steps.json
 
 `steps.json` contains the full Playwright JSON reporter output — test durations,
 individual step timings, stdout, stderr, and error messages. This is the primary
 data source for the performance data (`'TestDuration'=...`) in the Nagios output.
+
+### Per-Run Directories with `%t`
+
+Add `%t` to `--result-dir` to create an isolated, timestamped directory for each
+run instead of overwriting results from previous runs:
+
+```bash
+check_cep \
+  --host-name myhost \
+  --service-description Formular \
+  --result-dir /omd/sites/cep/var/tmp/check_cep/%h/%s/%t \
+  --report-url http://cep-host/reports/%h/%s/%t/playwright-report/index.html \
+  ...
+```
+
+Each run creates a directory named after the Unix epoch of its start time
+(e.g. `/omd/.../Formular/1710763200/`), keeping all runs independent.
+
+To automatically delete old run directories, add `--report-retention`:
+
+```bash
+# Keep only the last 24 hours of reports; delete everything older
+check_cep \
+  --result-dir .../check_cep/%h/%s/%t \
+  --report-retention 24h \
+  ...
+```
+
+Cleanup runs after each check, deleting oldest-first, and always stops with at
+least 10 seconds remaining before the plugin timeout.
 
 ## 5. File Ownership in Local Mode
 
@@ -536,7 +571,8 @@ and writes results to `$OMD_ROOT/var/tmp/check_cep/webserver01/E2E_Login_Check/`
 | `--result-dest` | `local` | `local` or `s3` |
 | `--logging` | `none` | `none` or `loki` |
 | `--test-dir` | `$OMD_ROOT/etc/check_cep/tests/%h/%s` | Host-side test directory |
-| `--result-dir` | `$OMD_ROOT/var/tmp/check_cep/%h/%s` | Host-side result directory |
+| `--result-dir` | `$OMD_ROOT/var/tmp/check_cep/%h/%s` | Host-side result directory. Supports `%h` (hostname), `%s` (service), `%t` (Unix epoch of process start — creates a new directory per run) |
+| `--report-retention` | off | Delete run directories older than this duration after each run (e.g. `24h`, `168h`). Requires `%t` in `--result-dir`. |
 | `--timeout` | `60` | Container timeout in seconds |
 | `--memory-limit` | `2g` | Container memory limit |
 | `--debug` | off | Verbose logging |

@@ -6,6 +6,29 @@ available in the next container image build.
 
 ---
 
+## Spec 009 — Local Report Housekeeping
+
+**Branch**: `009-report-management`
+
+### Added
+- `%t` placeholder in `--result-dir` and `--report-url` — resolves to the process start time (Unix epoch), giving each run its own isolated timestamped directory
+- `--report-retention Xh` — auto-deletes old per-run directories after each check, oldest-first, with a 10 s safety margin before the plugin timeout deadline
+- `CleanupResult` dataclass, `ReportCleanupPlugin` Protocol, and `LocalCleanup` implementation — storage-agnostic cleanup with S3 extensibility in mind
+- `CEP_STARTED` env var — host process start time passed into the container so `test-meta.json` records the same timestamp used for `%t`
+- `docs/CONTEXT.md` — design document for a future `RunContext` refactor
+
+### Changed
+- `test-meta.json` schema v2: `timestamp` field renamed to `finished`; new `started` field added (Unix epoch of host process start)
+- PID file relocated from `result_dir/` to `$OMD_ROOT/var/tmp/check_cep.{testident}.pid` so the duplicate-run guard works when `%t` creates unique per-run directories
+- Dockerfile: direct nightly binary fallback for Lightpanda when the npm postinstall fails due to GitHub API rate-limiting during the build
+- `patch-lightpanda.js`: infrastructure log lines moved from `console.error` to `console.log` with `[CEPDBG]` prefix — prevents false WARNING triggers from stderr detection
+- `run.py`: `OSError` added alongside `RuntimeError` when catching Lightpanda startup failures — missing binary now produces `UNKNOWN` instead of an unhandled exception crash
+
+### Fixed
+- Playwright report URL in plugin output now resolves `%t` to the correct run timestamp when `test-meta.json` contains `started`
+
+---
+
 ## Spec 008 — Unified Debug Logging
 
 **Branch**: `008-debug-logging`

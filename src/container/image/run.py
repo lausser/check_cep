@@ -83,10 +83,12 @@ def load_plugin(registry: dict, env_value: str, axis_name: str):
 # ---------------------------------------------------------------------------
 
 def write_test_meta(results_path: str, hostname: str, servicedescription: str,
-                    exitcode: int, duration: float, probe_location: str) -> dict:
-    """Write test-meta.json with execution metadata."""
+                    exitcode: int, duration: float, probe_location: str,
+                    cep_started: str = "") -> dict:
+    """Write test-meta.json with execution metadata (v2 schema)."""
     meta = {
-        "timestamp": str(int(time.time())),
+        "started": cep_started if cep_started else str(int(time.time())),
+        "finished": str(int(time.time())),
         "hostname": hostname,
         "servicedescription": servicedescription,
         "exitcode": exitcode,
@@ -264,6 +266,7 @@ def main() -> int:
     servicedescription = os.environ.get("NAGIOS_SERVICEDESC", "")
     testident = os.environ.get("TESTIDENT", "")
     timeout_sec = int(os.environ.get("PWTIMEOUT", "60"))
+    cep_started = os.environ.get("CEP_STARTED", "")
     probe_location = os.environ.get("PROBE_LOCATION", "unknown")
     debug = os.environ.get("DEBUG", "")
     headed = bool(os.environ.get("HEADED", ""))
@@ -308,7 +311,7 @@ def main() -> int:
     if browser == "lightpanda":
         try:
             lightpanda_proc = start_lightpanda_cdp()
-        except RuntimeError as e:
+        except (RuntimeError, OSError) as e:
             print(f"UNKNOWN: {e}")
             return 3
 
@@ -330,7 +333,7 @@ def main() -> int:
         exitcode = 2
 
     # Step 4: Write test-meta.json
-    meta = write_test_meta(results_dir, hostname, servicedescription, exitcode, duration, probe_location)
+    meta = write_test_meta(results_dir, hostname, servicedescription, exitcode, duration, probe_location, cep_started)
 
     # Step 5: Publish results (non-fatal)
     try:
@@ -348,7 +351,8 @@ def main() -> int:
                 "status": meta["status"],
                 "duration": meta["duration"],
                 "probe_location": probe_location,
-                "timestamp": meta["timestamp"],
+                "started": meta["started"],
+                "finished": meta["finished"],
             }
             logging_module.ship_logs(test_name, summary)
         except Exception as e:

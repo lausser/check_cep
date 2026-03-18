@@ -39,18 +39,18 @@ try {
   const chromium = pw.chromium;
 
   chromium.launch = async function patchedLaunch(_options) {
-    console.error('[cep] Overriding chromium.launch -> connectOverCDP(' + CDP_ENDPOINT + ')');
+    console.log('[CEPDBG] Overriding chromium.launch -> connectOverCDP(' + CDP_ENDPOINT + ')');
     return connectAndPatch();
   };
 
   chromium.launchPersistentContext = async function patchedLaunchPersistent(_userDataDir, _options) {
-    console.error('[cep] Overriding chromium.launchPersistentContext -> connectOverCDP(' + CDP_ENDPOINT + ')');
+    console.log('[CEPDBG] Overriding chromium.launchPersistentContext -> connectOverCDP(' + CDP_ENDPOINT + ')');
     const browser = await connectAndPatch();
     return browser.contexts()[0];
   };
 
-  console.error('[cep] Playwright monkey-patch loaded: chromium will use Lightpanda CDP');
+  console.log('[CEPDBG] Playwright monkey-patch loaded: chromium will use Lightpanda CDP');
 } catch (err) {
-  console.error('[cep] Failed to patch Playwright for Lightpanda: ' + err.message);
+  console.log('[CEP] Failed to patch Playwright for Lightpanda: ' + err.message);
   process.exit(1);
 }

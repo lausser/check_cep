@@ -184,7 +184,9 @@ test('consol.de homepage loads', async ({ page }) => {
     assert meta["servicedescription"] == "pytest_test"
     assert meta["status"] == "OK"
     assert "duration" in meta
-    assert "timestamp" in meta
+    assert "started" in meta, "test-meta.json v2 must have 'started' field"
+    assert "finished" in meta, "test-meta.json v2 must have 'finished' field"
+    assert "timestamp" not in meta, "legacy 'timestamp' key must not be present in v2 schema"
 
     # HTML report must exist and be non-empty
     report = result_dir / "playwright-report" / "index.html"
