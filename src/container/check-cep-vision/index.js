@@ -828,15 +828,15 @@ function failureMessage(result, confidence) {
  * Locate a template once and return the full structured result.
  */
 async function locateByImage(page, templatePath, options = {}) {
-  console.error('[cep] locateByImage called: template=' + path.basename(templatePath));
+  console.log('[CEPDBG] locateByImage called: template=' + path.basename(templatePath));
   if (!canScreenshot()) {
-    console.error('[cep] locateByImage rejected: no visual browser');
+    console.log('[CEPDBG] locateByImage rejected: no visual browser');
     throw new Error('locateByImage requires a visual browser (current: lightpanda). Use DOM selectors instead.');
   }
   const scales = options.scales ?? DEFAULT_SCALES;
   const templateBundle = await loadTemplateBundle(templatePath, scales);
   const result = await locateWithTemplate(page, templateBundle, options);
-  console.error('[cep] locateByImage result: reason=' + result.reason + (result.bestCandidate ? ' score=' + result.bestCandidate.combinedScore.toFixed(4) : ''));
+  console.log('[CEPDBG] locateByImage result: reason=' + result.reason + (result.bestCandidate ? ' score=' + result.bestCandidate.combinedScore.toFixed(4) : ''));
   return result;
 }
 
@@ -849,9 +849,9 @@ async function locateByImage(page, templatePath, options = {}) {
  */
 async function waitForImage(page, templatePath, options = {}) {
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-  console.error('[cep] waitForImage called: template=' + path.basename(templatePath) + ' timeout=' + timeoutMs + 'ms');
+  console.log('[CEPDBG] waitForImage called: template=' + path.basename(templatePath) + ' timeout=' + timeoutMs + 'ms');
   if (!canScreenshot()) {
-    console.error('[cep] waitForImage rejected: no visual browser');
+    console.log('[CEPDBG] waitForImage rejected: no visual browser');
     throw new Error('waitForImage requires a visual browser (current: lightpanda). Use DOM selectors instead.');
   }
   const pollMs = options.pollMs ?? DEFAULT_POLL_MS;
@@ -864,16 +864,16 @@ async function waitForImage(page, templatePath, options = {}) {
   while (Date.now() - start <= timeoutMs) {
     lastResult = await locateWithTemplate(page, templateBundle, { ...options, scales });
     if (lastResult.found) {
-      console.error('[cep] waitForImage succeeded: template=' + path.basename(templatePath) + ' elapsed=' + (Date.now() - start) + 'ms');
+      console.log('[CEPDBG] waitForImage succeeded: template=' + path.basename(templatePath) + ' elapsed=' + (Date.now() - start) + 'ms');
       return lastResult;
     }
     if (isTerminalReason(lastResult.reason)) {
-      console.error('[cep] waitForImage failed (terminal): reason=' + lastResult.reason);
+      console.log('[CEPDBG] waitForImage failed (terminal): reason=' + lastResult.reason);
       throw new Error(failureMessage(lastResult, confidence));
     }
     await page.waitForTimeout(pollMs);
   }
-  console.error('[cep] waitForImage failed (timeout): reason=' + (lastResult ? lastResult.reason : 'none') + ' elapsed=' + (Date.now() - start) + 'ms');
+  console.log('[CEPDBG] waitForImage failed (timeout): reason=' + (lastResult ? lastResult.reason : 'none') + ' elapsed=' + (Date.now() - start) + 'ms');
   throw new Error(failureMessage(lastResult, confidence));
 }
 
@@ -884,18 +884,18 @@ async function waitForImage(page, templatePath, options = {}) {
  * because those are operational problems, not normal absence.
  */
 async function existsByImage(page, templatePath, options = {}) {
-  console.error('[cep] existsByImage called: template=' + path.basename(templatePath));
+  console.log('[CEPDBG] existsByImage called: template=' + path.basename(templatePath));
   if (!canScreenshot()) {
-    console.error('[cep] existsByImage rejected: no visual browser');
+    console.log('[CEPDBG] existsByImage rejected: no visual browser');
     throw new Error('existsByImage requires a visual browser (current: lightpanda). Use DOM selectors instead.');
   }
   const result = await locateByImage(page, templatePath, options);
   if (result.found) {
-    console.error('[cep] existsByImage result: true');
+    console.log('[CEPDBG] existsByImage result: true');
     return true;
   }
   if (result.reason === 'not-found') {
-    console.error('[cep] existsByImage result: false');
+    console.log('[CEPDBG] existsByImage result: false');
     return false;
   }
   throw new Error(formatResultReason(result));
@@ -997,16 +997,16 @@ async function isVisibleLocator(locator) {
  * concise "try these visible targets" helper.
  */
 async function clickFirstVisible(candidates, options = {}) {
-  console.error('[cep] clickFirstVisible called: candidates=' + candidates.length);
+  console.log('[CEPDBG] clickFirstVisible called: candidates=' + candidates.length);
   for (let i = 0; i < candidates.length; i++) {
     if (await isVisibleLocator(candidates[i])) {
       await highlightLocator(candidates[i], options).catch(() => undefined);
       await candidates[i].first().click();
-      console.error('[cep] clickFirstVisible succeeded: candidate index=' + i);
+      console.log('[CEPDBG] clickFirstVisible succeeded: candidate index=' + i);
       return { strategy: 'dom' };
     }
   }
-  console.error('[cep] clickFirstVisible failed: no visible target');
+  console.log('[CEPDBG] clickFirstVisible failed: no visible target');
   throw new Error('No visible click target found.');
 }
 
@@ -1014,17 +1014,17 @@ async function clickFirstVisible(candidates, options = {}) {
  * Fill the first visible selector from a list of candidate selectors.
  */
 async function fillFirstVisible(page, selectors, value, options = {}) {
-  console.error('[cep] fillFirstVisible called: selectors=' + selectors.length);
+  console.log('[CEPDBG] fillFirstVisible called: selectors=' + selectors.length);
   for (let i = 0; i < selectors.length; i++) {
     const locator = page.locator(selectors[i]).first();
     if (await isVisibleLocator(locator)) {
       await highlightLocator(locator, options).catch(() => undefined);
       await locator.fill(value);
-      console.error('[cep] fillFirstVisible succeeded: selector index=' + i);
+      console.log('[CEPDBG] fillFirstVisible succeeded: selector index=' + i);
       return { strategy: 'dom' };
     }
   }
-  console.error('[cep] fillFirstVisible failed: no visible selector');
+  console.log('[CEPDBG] fillFirstVisible failed: no visible selector');
   throw new Error(`No visible selector found for value ${value}`);
 }
 
@@ -1043,21 +1043,21 @@ function visionOptions(options = {}) {
  * `typeByImage()`.
  */
 async function typeByImageOr(page, templatePath, text, selectors, options = {}) {
-  console.error('[cep] typeByImageOr called: template=' + path.basename(templatePath) + ' selectors=' + selectors.length);
+  console.log('[CEPDBG] typeByImageOr called: template=' + path.basename(templatePath) + ' selectors=' + selectors.length);
   if (!canScreenshot()) {
-    console.error('[cep] typeByImageOr skipping vision (no visual browser), using DOM fallback');
+    console.log('[CEPDBG] typeByImageOr skipping vision (no visual browser), using DOM fallback');
     await fillFirstVisible(page, selectors, text, options);
-    console.error('[cep] typeByImageOr succeeded: strategy=dom');
+    console.log('[CEPDBG] typeByImageOr succeeded: strategy=dom');
     return { strategy: 'dom' };
   }
   try {
     const result = await typeByImage(page, templatePath, text, visionOptions(options));
-    console.error('[cep] typeByImageOr succeeded: strategy=vision');
+    console.log('[CEPDBG] typeByImageOr succeeded: strategy=vision');
     return { strategy: 'vision', result };
   } catch (err) {
-    console.error('[cep] typeByImageOr vision failed: ' + err.message + ', falling back to DOM');
+    console.log('[CEPDBG] typeByImageOr vision failed: ' + err.message + ', falling back to DOM');
     await fillFirstVisible(page, selectors, text, options);
-    console.error('[cep] typeByImageOr succeeded: strategy=dom');
+    console.log('[CEPDBG] typeByImageOr succeeded: strategy=dom');
     return { strategy: 'dom' };
   }
 }
@@ -1066,21 +1066,21 @@ async function typeByImageOr(page, templatePath, text, selectors, options = {}) 
  * Image-first clicking with DOM fallback.
  */
 async function clickByImageOr(page, templatePath, candidates, options = {}) {
-  console.error('[cep] clickByImageOr called: template=' + path.basename(templatePath) + ' candidates=' + candidates.length);
+  console.log('[CEPDBG] clickByImageOr called: template=' + path.basename(templatePath) + ' candidates=' + candidates.length);
   if (!canScreenshot()) {
-    console.error('[cep] clickByImageOr skipping vision (no visual browser), using DOM fallback');
+    console.log('[CEPDBG] clickByImageOr skipping vision (no visual browser), using DOM fallback');
     await clickFirstVisible(candidates, options);
-    console.error('[cep] clickByImageOr succeeded: strategy=dom');
+    console.log('[CEPDBG] clickByImageOr succeeded: strategy=dom');
     return { strategy: 'dom' };
   }
   try {
     const result = await clickByImage(page, templatePath, visionOptions(options));
-    console.error('[cep] clickByImageOr succeeded: strategy=vision');
+    console.log('[CEPDBG] clickByImageOr succeeded: strategy=vision');
     return { strategy: 'vision', result };
   } catch (err) {
-    console.error('[cep] clickByImageOr vision failed: ' + err.message + ', falling back to DOM');
+    console.log('[CEPDBG] clickByImageOr vision failed: ' + err.message + ', falling back to DOM');
     await clickFirstVisible(candidates, options);
-    console.error('[cep] clickByImageOr succeeded: strategy=dom');
+    console.log('[CEPDBG] clickByImageOr succeeded: strategy=dom');
     return { strategy: 'dom' };
   }
 }
@@ -1092,14 +1092,14 @@ async function clickByImageOr(page, templatePath, candidates, options = {}) {
  * manual/reference documentation.
  */
 async function highlightByImage(page, templatePath, options = {}) {
-  console.error('[cep] highlightByImage called: template=' + path.basename(templatePath));
+  console.log('[CEPDBG] highlightByImage called: template=' + path.basename(templatePath));
   if (!canScreenshot()) {
-    console.error('[cep] highlightByImage rejected: no visual browser');
+    console.log('[CEPDBG] highlightByImage rejected: no visual browser');
     throw new Error('highlightByImage requires a visual browser (current: lightpanda). Use DOM selectors instead.');
   }
   const result = await waitForImage(page, templatePath, options);
   await highlightMatchBox(page, result.bestCandidate, options);
-  console.error('[cep] highlightByImage succeeded');
+  console.log('[CEPDBG] highlightByImage succeeded');
   return result;
 }
 
@@ -1107,16 +1107,16 @@ async function highlightByImage(page, templatePath, options = {}) {
  * Click the best image match after waiting for it and highlighting it.
  */
 async function clickByImage(page, templatePath, options = {}) {
-  console.error('[cep] clickByImage called: template=' + path.basename(templatePath));
+  console.log('[CEPDBG] clickByImage called: template=' + path.basename(templatePath));
   if (!canScreenshot()) {
-    console.error('[cep] clickByImage rejected: no visual browser');
+    console.log('[CEPDBG] clickByImage rejected: no visual browser');
     throw new Error('clickByImage requires a visual browser (current: lightpanda). Use DOM selectors instead, or use clickByImageOr for automatic DOM fallback.');
   }
   const result = await waitForImage(page, templatePath, options);
   await highlightMatchBox(page, result.bestCandidate, options);
   const point = offsetPoint(result.bestCandidate, options.clickOffset);
   await page.mouse.click(point.x, point.y);
-  console.error('[cep] clickByImage succeeded: strategy=vision click=(' + point.x + ',' + point.y + ')');
+  console.log('[CEPDBG] clickByImage succeeded: strategy=vision click=(' + point.x + ',' + point.y + ')');
   return { ...result, clickPoint: point };
 }
 
@@ -1124,14 +1124,14 @@ async function clickByImage(page, templatePath, options = {}) {
  * Type text into the best image match by clicking it first.
  */
 async function typeByImage(page, templatePath, text, options = {}) {
-  console.error('[cep] typeByImage called: template=' + path.basename(templatePath));
+  console.log('[CEPDBG] typeByImage called: template=' + path.basename(templatePath));
   if (!canScreenshot()) {
-    console.error('[cep] typeByImage rejected: no visual browser');
+    console.log('[CEPDBG] typeByImage rejected: no visual browser');
     throw new Error('typeByImage requires a visual browser (current: lightpanda). Use DOM selectors instead, or use typeByImageOr for automatic DOM fallback.');
   }
   const clicked = await clickByImage(page, templatePath, options);
   await page.keyboard.type(text);
-  console.error('[cep] typeByImage succeeded: strategy=vision');
+  console.log('[CEPDBG] typeByImage succeeded: strategy=vision');
   return clicked;
 }
 
@@ -1147,19 +1147,16 @@ async function prepareTarget(locator, options = {}) {
 
   if (options.scrollIntoView !== false && canScreenshot()) {
     try {
-      if (process.env.DEBUG) {
-        console.error('[cep] prepareTarget scroll: attempting');
-      }
+      console.log('[CEPDBG] prepareTarget scroll: attempting');
+
       await target.evaluate((element) => {
         element.scrollIntoView({ block: 'center', inline: 'center' });
       });
-      if (process.env.DEBUG) {
-        console.error('[cep] prepareTarget scroll: succeeded');
-      }
+      console.log('[CEPDBG] prepareTarget scroll: succeeded');
+
     } catch (e) {
-      if (process.env.DEBUG) {
-        console.error('[cep] prepareTarget scroll: failed (' + e.message + ')');
-      }
+      console.log('[CEPDBG] prepareTarget scroll: failed (' + e.message + ')');
+
     }
   }
 
@@ -1182,49 +1179,43 @@ async function prepareTarget(locator, options = {}) {
  * Fallback chain: standard click → forced click → DOM-level click.
  */
 async function clickBestEffort(locator, options = {}) {
-  console.error('[cep] clickBestEffort called');
+  console.log('[CEPDBG] clickBestEffort called');
   const target = await prepareTarget(locator, options);
 
   try {
     await target.click();
-    if (process.env.DEBUG) {
-      console.error('[cep] clickBestEffort click: succeeded');
-    }
-    console.error('[cep] clickBestEffort succeeded');
+    console.log('[CEPDBG] clickBestEffort click: succeeded');
+
+    console.log('[CEPDBG] clickBestEffort succeeded');
     return { strategy: 'dom' };
   } catch (e) {
-    if (process.env.DEBUG) {
-      console.error('[cep] clickBestEffort click: failed (' + e.message + ')');
-    }
+    console.log('[CEPDBG] clickBestEffort click: failed (' + e.message + ')');
+
   }
 
   try {
     await target.click({ force: true });
-    if (process.env.DEBUG) {
-      console.error('[cep] clickBestEffort click({force}): succeeded');
-    }
-    console.error('[cep] clickBestEffort succeeded');
+    console.log('[CEPDBG] clickBestEffort click({force}): succeeded');
+
+    console.log('[CEPDBG] clickBestEffort succeeded');
     return { strategy: 'dom' };
   } catch (e) {
-    if (process.env.DEBUG) {
-      console.error('[cep] clickBestEffort click({force}): failed (' + e.message + ')');
-    }
+    console.log('[CEPDBG] clickBestEffort click({force}): failed (' + e.message + ')');
+
   }
 
   try {
     await target.evaluate((el) => { el.click(); });
-    if (process.env.DEBUG) {
-      console.error('[cep] clickBestEffort evaluate(click): succeeded');
-    }
-    console.error('[cep] clickBestEffort succeeded');
+    console.log('[CEPDBG] clickBestEffort evaluate(click): succeeded');
+
+    console.log('[CEPDBG] clickBestEffort succeeded');
     return { strategy: 'dom' };
   } catch (e) {
-    if (process.env.DEBUG) {
-      console.error('[cep] clickBestEffort evaluate(click): failed (' + e.message + ')');
-    }
+    console.log('[CEPDBG] clickBestEffort evaluate(click): failed (' + e.message + ')');
+
   }
 
-  console.error('[cep] clickBestEffort failed: all strategies exhausted');
+  console.log('[CEPDBG] clickBestEffort failed: all strategies exhausted');
   throw new Error('clickBestEffort: all click strategies failed (tried: click, click({force}), evaluate(click))');
 }
 
@@ -1234,35 +1225,31 @@ async function clickBestEffort(locator, options = {}) {
  * Fallback chain: click + type → forced click + type → DOM-level focus + value set.
  */
 async function typeBestEffort(locator, text, options = {}) {
-  console.error('[cep] typeBestEffort called');
+  console.log('[CEPDBG] typeBestEffort called');
   const target = await prepareTarget(locator, options);
 
   try {
     await target.click();
     await target.type(text);
-    if (process.env.DEBUG) {
-      console.error('[cep] typeBestEffort click+type: succeeded');
-    }
-    console.error('[cep] typeBestEffort succeeded');
+    console.log('[CEPDBG] typeBestEffort click+type: succeeded');
+
+    console.log('[CEPDBG] typeBestEffort succeeded');
     return { strategy: 'dom' };
   } catch (e) {
-    if (process.env.DEBUG) {
-      console.error('[cep] typeBestEffort click+type: failed (' + e.message + ')');
-    }
+    console.log('[CEPDBG] typeBestEffort click+type: failed (' + e.message + ')');
+
   }
 
   try {
     await target.click({ force: true });
     await target.type(text);
-    if (process.env.DEBUG) {
-      console.error('[cep] typeBestEffort click({force})+type: succeeded');
-    }
-    console.error('[cep] typeBestEffort succeeded');
+    console.log('[CEPDBG] typeBestEffort click({force})+type: succeeded');
+
+    console.log('[CEPDBG] typeBestEffort succeeded');
     return { strategy: 'dom' };
   } catch (e) {
-    if (process.env.DEBUG) {
-      console.error('[cep] typeBestEffort click({force})+type: failed (' + e.message + ')');
-    }
+    console.log('[CEPDBG] typeBestEffort click({force})+type: failed (' + e.message + ')');
+
   }
 
   try {
@@ -1271,18 +1258,16 @@ async function typeBestEffort(locator, text, options = {}) {
       el.value = t;
       el.dispatchEvent(new Event('input', { bubbles: true }));
     }, text);
-    if (process.env.DEBUG) {
-      console.error('[cep] typeBestEffort evaluate(focus+value): succeeded');
-    }
-    console.error('[cep] typeBestEffort succeeded');
+    console.log('[CEPDBG] typeBestEffort evaluate(focus+value): succeeded');
+
+    console.log('[CEPDBG] typeBestEffort succeeded');
     return { strategy: 'dom' };
   } catch (e) {
-    if (process.env.DEBUG) {
-      console.error('[cep] typeBestEffort evaluate(focus+value): failed (' + e.message + ')');
-    }
+    console.log('[CEPDBG] typeBestEffort evaluate(focus+value): failed (' + e.message + ')');
+
   }
 
-  console.error('[cep] typeBestEffort failed: all strategies exhausted');
+  console.log('[CEPDBG] typeBestEffort failed: all strategies exhausted');
   throw new Error('typeBestEffort: all type strategies failed (tried: click+type, click({force})+type, evaluate(focus+value))');
 }
 
@@ -1292,34 +1277,30 @@ async function typeBestEffort(locator, text, options = {}) {
  * Fallback chain: fill → click + fill → DOM-level focus + value set + events.
  */
 async function fillBestEffort(locator, value, options = {}) {
-  console.error('[cep] fillBestEffort called');
+  console.log('[CEPDBG] fillBestEffort called');
   const target = await prepareTarget(locator, options);
 
   try {
     await target.fill(value);
-    if (process.env.DEBUG) {
-      console.error('[cep] fillBestEffort fill: succeeded');
-    }
-    console.error('[cep] fillBestEffort succeeded');
+    console.log('[CEPDBG] fillBestEffort fill: succeeded');
+
+    console.log('[CEPDBG] fillBestEffort succeeded');
     return { strategy: 'dom' };
   } catch (e) {
-    if (process.env.DEBUG) {
-      console.error('[cep] fillBestEffort fill: failed (' + e.message + ')');
-    }
+    console.log('[CEPDBG] fillBestEffort fill: failed (' + e.message + ')');
+
   }
 
   try {
     await target.click();
     await target.fill(value);
-    if (process.env.DEBUG) {
-      console.error('[cep] fillBestEffort click+fill: succeeded');
-    }
-    console.error('[cep] fillBestEffort succeeded');
+    console.log('[CEPDBG] fillBestEffort click+fill: succeeded');
+
+    console.log('[CEPDBG] fillBestEffort succeeded');
     return { strategy: 'dom' };
   } catch (e) {
-    if (process.env.DEBUG) {
-      console.error('[cep] fillBestEffort click+fill: failed (' + e.message + ')');
-    }
+    console.log('[CEPDBG] fillBestEffort click+fill: failed (' + e.message + ')');
+
   }
 
   try {
@@ -1329,18 +1310,16 @@ async function fillBestEffort(locator, value, options = {}) {
       el.dispatchEvent(new Event('input', { bubbles: true }));
       el.dispatchEvent(new Event('change', { bubbles: true }));
     }, value);
-    if (process.env.DEBUG) {
-      console.error('[cep] fillBestEffort evaluate(focus+value+events): succeeded');
-    }
-    console.error('[cep] fillBestEffort succeeded');
+    console.log('[CEPDBG] fillBestEffort evaluate(focus+value+events): succeeded');
+
+    console.log('[CEPDBG] fillBestEffort succeeded');
     return { strategy: 'dom' };
   } catch (e) {
-    if (process.env.DEBUG) {
-      console.error('[cep] fillBestEffort evaluate(focus+value+events): failed (' + e.message + ')');
-    }
+    console.log('[CEPDBG] fillBestEffort evaluate(focus+value+events): failed (' + e.message + ')');
+
   }
 
-  console.error('[cep] fillBestEffort failed: all strategies exhausted');
+  console.log('[CEPDBG] fillBestEffort failed: all strategies exhausted');
   throw new Error('fillBestEffort: all fill strategies failed (tried: fill, click+fill, evaluate(focus+value+events))');
 }
 

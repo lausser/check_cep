@@ -32,6 +32,10 @@ function cepLogUrl(page) {
   cepLog(`current page url is ${page.url()}`);
 }
 
+function cepDebug(message) {
+  console.log(`[CEPDBG] ${message}`);
+}
+
 module.exports = {
   getTimestamp,
   cepLog,
@@ -41,4 +45,5 @@ module.exports = {
   cepLogPress,
   cepLogWait,
   cepLogUrl,
+  cepDebug,
 };

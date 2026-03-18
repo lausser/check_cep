@@ -1,4 +1,4 @@
-.PHONY: help image test-image test-local test-all test-clean teaser
+.PHONY: help image test-image test-local test-all test-clean teaser package-lock
 
 PLAYWRIGHT_VERSION ?= v1.58.2
 
@@ -10,6 +10,7 @@ help:
 	@echo "  test-all                          Run full suite (requires podman-compose stack)"
 	@echo "  test-clean                        Tear down the podman-compose stack"
 	@echo "  teaser                            Generate docs/teaser.gif from a real test run"
+	@echo "  package-lock                      Regenerate src/container/package-lock.json from package.json"
 	@echo ""
 	@echo "Override Playwright version: make image PLAYWRIGHT_VERSION=v1.60.0"
 
@@ -37,3 +38,6 @@ test-clean:
 
 teaser: test-image
 	bash scripts/generate-teaser.sh
+
+package-lock:
+	npm install --package-lock-only --prefix src/container

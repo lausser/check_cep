@@ -6,3 +6,4 @@ export function cepLogType(target: string, value: string): void;
 export function cepLogPress(target: string): void;
 export function cepLogWait(durationMs: number, reason: string): void;
 export function cepLogUrl(page: any): void;
+export function cepDebug(message: string): void;

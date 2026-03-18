@@ -608,7 +608,7 @@ def extract_perfdata_from_steps(subjson: dict, level: int = 0, prefix: str = "")
     return perfdata
 
 
-def extract_output_from_steps(subjson: dict, level: int = 0, prefix: str = "") -> Tuple[str, bool]:
+def extract_output_from_steps(subjson: dict, level: int = 0, prefix: str = "", debug: bool = False) -> Tuple[str, bool]:
     """Recursively extract stdout/stderr/errors from steps.json.
 
     Returns (output_text, has_stderr).
@@ -623,12 +623,12 @@ def extract_output_from_steps(subjson: dict, level: int = 0, prefix: str = "") -
             new_prefix = prefix
         else:
             new_prefix = prefix + " - " + suite["title"]
-        sub_output, sub_stderr = extract_output_from_steps(suite, level + 1, new_prefix)
+        sub_output, sub_stderr = extract_output_from_steps(suite, level + 1, new_prefix, debug)
         output += sub_output
         has_stderr = has_stderr or sub_stderr
 
     for spec in subjson.get("specs", []):
-        sub_output, sub_stderr = extract_output_from_steps(spec, level + 1, prefix + " - " + spec["title"])
+        sub_output, sub_stderr = extract_output_from_steps(spec, level + 1, prefix + " - " + spec["title"], debug)
         output += sub_output
         has_stderr = has_stderr or sub_stderr
 
@@ -638,7 +638,7 @@ def extract_output_from_steps(subjson: dict, level: int = 0, prefix: str = "") -
         else:
             new_prefix = prefix
         if len(test["results"]) > 0:
-            sub_output, sub_stderr = extract_output_from_steps(test["results"][0], level + 1, new_prefix)
+            sub_output, sub_stderr = extract_output_from_steps(test["results"][0], level + 1, new_prefix, debug)
             output += sub_output
             has_stderr = has_stderr or sub_stderr
 
@@ -646,16 +646,16 @@ def extract_output_from_steps(subjson: dict, level: int = 0, prefix: str = "") -
         if index == 0:
             output += "\n__Stdout " + prefix + "__"
         text = stdout_entry.get("text", "")
-        if not text.startswith("NagiosPerfData:"):
-            output += "\n" + text.rstrip()
+        if text.startswith("NagiosPerfData:"):
+            continue
+        if text.lstrip().startswith("[CEPDBG]") and not debug:
+            continue
+        output += "\n" + text.rstrip()
 
     stderr_lines = []
     for stderr_entry in subjson.get("stderr", []):
         text = stderr_entry.get("text", "").rstrip()
-        # [cep] lines are infrastructure messages (e.g. from patch-lightpanda.js),
-        # not real test stderr — skip them like run_playwright() does.
-        if not text.lstrip().startswith("[cep] "):
-            stderr_lines.append(text)
+        stderr_lines.append(text)
     if stderr_lines:
         output += "\n__Stderr " + prefix + "__"
         for line in stderr_lines:
@@ -1289,7 +1289,7 @@ def main() -> int:
     if steps_data is not None:
         perfdata.extend(extract_perfdata_from_steps(steps_data))
         perfdata.extend(extract_nagios_perfdata_from_stdout(steps_data))
-        container_output, has_stderr_in_steps = extract_output_from_steps(steps_data)
+        container_output, has_stderr_in_steps = extract_output_from_steps(steps_data, debug=args.debug)
     else:
         container_output = stdout_str
         if stderr_str:

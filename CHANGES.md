@@ -6,6 +6,25 @@ available in the next container image build.
 
 ---
 
+## Spec 008 — Unified Debug Logging
+
+**Branch**: `008-debug-logging`
+
+### Added
+- `cepDebug(message)` function in `check-cep-helpers` — test authors can emit debug-only messages with the `[CEPDBG]` prefix, visible only with `--debug`
+- TypeScript declaration for `cepDebug` in `check-cep-helpers/index.d.ts`
+
+### Changed
+- Vision traces (`check-cep-vision`) moved from `console.error('[cep] ...')` on stderr to `console.log('[CEPDBG] ...')` on stdout — eliminates false WARNING triggers from stderr pollution and makes vision diagnostics visible with `--debug`
+- `extract_output_from_steps()` now accepts a `debug` parameter; stdout lines starting with `[CEPDBG]` are filtered out unless `--debug` is active — single filtering point on the host side
+- `extract_output_from_steps()` no longer filters `[cep] ` from stderr — all stderr entries pass through unconditionally (no `[cep]` lines will be produced anymore)
+- `run.py` dispatcher now forwards Playwright stdout and stderr unchanged — removed `[cep]` prefix filter loop
+
+### Fixed
+- False WARNING status when running vision-using tests (caused by `[cep]` lines on stderr being detected as `has_stderr`)
+
+---
+
 ## Spec 007 — Vision Autoscroll (Best-Effort Interaction Functions)
 
 **Branch**: `007-vision-autoscroll`

@@ -196,22 +196,11 @@ def run_playwright(test_dir: str, results_path: str, timeout_sec: int,
     logger.debug(f"Running: {cmd} in {test_dir}")
     proc = subprocess.run(cmd, shell=True, capture_output=True, cwd=test_dir, env=env)
 
-    # Filter [cep] infrastructure lines from output, route to debug log.
-    # All other lines pass through unchanged to the host.
     for stream, writer in ((proc.stdout, sys.stdout.buffer),
                            (proc.stderr, sys.stderr.buffer)):
-        if not stream:
-            continue
-        lines = stream.split(b"\n")
-        filtered = []
-        for line in lines:
-            stripped = line.lstrip()
-            if stripped.startswith(b"[cep] "):
-                logger.debug(stripped.decode("utf-8", errors="replace"))
-            else:
-                filtered.append(line)
-        writer.write(b"\n".join(filtered))
-        writer.flush()
+        if stream:
+            writer.write(stream)
+            writer.flush()
 
     # coreutils timeout exits 124 (SIGTERM) or 137 (SIGKILL).
     # Playwright never gets to print its own timeout message, so emit a
