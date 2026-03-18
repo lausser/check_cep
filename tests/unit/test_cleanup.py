@@ -27,6 +27,8 @@ CleanupResult = _mod.CleanupResult
 parse_retention = _mod.parse_retention
 run_cleanup = _mod.run_cleanup
 
+from tests.unit.test_run_context import make_ctx, make_config  # noqa: E402
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -164,12 +166,13 @@ def test_run_cleanup_skips_when_insufficient_time(tmp_path):
     """When less than 10 s remain, cleanup is skipped entirely."""
     now_val = 1710763200.0
     # deadline is now_val + 5, so remaining = 5 < 10 → skip
+    ctx = make_ctx(
+        result_dir=str(tmp_path / "current"),
+        timeout_deadline=now_val + 5,
+        config=make_config(report_retention=3600),
+    )
     with patch("check_cep_mod.time.time", return_value=now_val):
-        result = run_cleanup(
-            LocalCleanup(), str(tmp_path), str(tmp_path / "current"),
-            retention_seconds=3600,
-            timeout_deadline=now_val + 5,
-        )
+        result = run_cleanup(LocalCleanup(), ctx)
     assert result.deleted == []
     assert result.skipped == []
     assert result.failed == []
@@ -198,12 +201,13 @@ def test_run_cleanup_stops_mid_loop(tmp_path):
             return base_time
         return base_time + 10000  # way past deadline
 
+    ctx = make_ctx(
+        result_dir=current_run_dir,
+        timeout_deadline=base_time + 15,
+        config=make_config(report_retention=retention),
+    )
     with patch("check_cep_mod.time.time", side_effect=fake_time):
-        result = run_cleanup(
-            LocalCleanup(), str(tmp_path), current_run_dir,
-            retention_seconds=retention,
-            timeout_deadline=base_time + 15,  # 15 s budget
-        )
+        result = run_cleanup(LocalCleanup(), ctx)
 
     # At least some were skipped when deadline crossed
     assert len(result.skipped) > 0

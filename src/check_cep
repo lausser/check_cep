@@ -193,6 +193,105 @@ def nagios_exit(status: str, message: str, perfdata_str: str = "", long_output: 
 
 
 # ---------------------------------------------------------------------------
+# Run context (010-run-context)
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class RunConfig:
+    """Typed, immutable representation of all CLI arguments.
+
+    Constructed once from argparse.Namespace immediately after argument
+    parsing. Every field has a name and type — no raw namespace access
+    after construction.
+    """
+    # Identity (required)
+    host_name: str
+    service_description: str
+    image: str
+    probe_location: str
+
+    # Plugin selectors
+    test_source: str
+    result_dest: str
+    logging: str
+
+    # Paths (templates — not yet expanded)
+    test_dir: str
+    result_dir: str
+    testscripts_cache: str
+
+    # Retention (already parsed to seconds by argparse type=parse_retention)
+    report_retention: Optional[int]
+
+    # Timing
+    timeout: int
+
+    # Resource limits
+    memory_limit: str
+
+    # Behaviour flags
+    debug: bool
+    shell: bool
+    headed: bool
+    browser: str
+
+    # Reporting
+    report_url: Optional[str]
+    href_target: str
+
+    # Registry credentials
+    registry_username: Optional[str]
+    registry_password: Optional[str]
+
+    # S3 credentials / config
+    s3_endpoint: Optional[str]
+    aws_access_key_id: Optional[str]
+    aws_secret_access_key: Optional[str]
+    s3_bucket: Optional[str]
+    s3_report_bucket: Optional[str]
+    s3_report_path: Optional[str]
+    s3_report_url: Optional[str]
+
+    # Loki credentials / config
+    loki_endpoint: Optional[str]
+    loki_user: Optional[str]
+    loki_password: Optional[str]
+    loki_proxy: Optional[str]
+
+    # Naemon state
+    current_status: Optional[str]
+
+
+@dataclass(frozen=True)
+class RunContext:
+    """Immutable per-run state derived from RunConfig plus environment.
+
+    Constructed once after RunConfig and after early validation (container
+    env check, headed pre-flight). Holds RunConfig for access to all
+    CLI arguments. Contains no mutable state.
+    """
+    # Identity (derived)
+    hostname: str
+    servicedescription: str
+    testname: str
+    testident: str
+    container_name: str
+
+    # Timing
+    start_time: float
+    started_str: str
+    timeout_deadline: float
+
+    # Paths (fully resolved — all template vars expanded)
+    result_dir: str
+    omd_root: str
+    pid_file: str
+
+    # All CLI arguments
+    config: RunConfig
+
+
+# ---------------------------------------------------------------------------
 # TESTNAME derivation and path template resolution (T005)
 # ---------------------------------------------------------------------------
 
@@ -209,12 +308,11 @@ def derive_testident(hostname: str, servicedescription: str) -> str:
     return urllib.parse.quote(f"{hostname}__{servicedescription}", safe="")
 
 
-def resolve_path_template(template: str, hostname: str, servicedescription: str,
-                          started: str = "") -> str:
+def resolve_path_template(template: str, ctx: "RunContext") -> str:
     """Replace %h, %s, and %t template variables in path strings."""
-    result = template.replace("%h", hostname).replace("%s", servicedescription)
-    if started:
-        result = result.replace("%t", started)
+    result = template.replace("%h", ctx.hostname).replace("%s", ctx.servicedescription)
+    if ctx.started_str:
+        result = result.replace("%t", ctx.started_str)
     return result
 
 
@@ -436,22 +534,19 @@ def parse_retention(value: str) -> int:
     return hours * 3600
 
 
-def run_cleanup(
-    plugin: ReportCleanupPlugin,
-    parent_dir: str,
-    current_run_dir: str,
-    retention_seconds: int,
-    timeout_deadline: float,
-) -> CleanupResult:
+def run_cleanup(plugin: ReportCleanupPlugin, ctx: RunContext) -> CleanupResult:
     """Delete eligible old run directories oldest-first within the timeout budget."""
+    parent_dir = os.path.dirname(ctx.result_dir)
+    current_run_dir = ctx.result_dir
+    retention_seconds = ctx.config.report_retention
     safety_margin = 10.0
     result = CleanupResult()
-    if time.time() > timeout_deadline - safety_margin:
+    if time.time() > ctx.timeout_deadline - safety_margin:
         logger.debug("run_cleanup: skipping, insufficient time remaining before deadline")
         return result
     candidates = plugin.list_candidates(parent_dir, current_run_dir, retention_seconds)
     for candidate in candidates:
-        if time.time() > timeout_deadline - safety_margin:
+        if time.time() > ctx.timeout_deadline - safety_margin:
             result.skipped.append(candidate["path"])
             continue
         try:
@@ -467,29 +562,29 @@ def run_cleanup(
 # Container environment variable assembly (T007)
 # ---------------------------------------------------------------------------
 
-def build_env_vars(args, started_str: str = "") -> Dict[str, str]:
-    """Build container environment variable dict from CLI args."""
+def build_env_vars(ctx: RunContext) -> Dict[str, str]:
+    """Build container environment variable dict from run context."""
     env = {
-        "TEST_SOURCE": args.test_source,
-        "RESULT_DEST": args.result_dest,
-        "LOGGING": args.logging,
-        "NAGIOS_HOSTNAME": args.host_name,
-        "NAGIOS_SERVICEDESC": args.service_description,
-        "PWTIMEOUT": str(args.timeout),
-        "PROBE_LOCATION": args.probe_location,
-        "TESTIDENT": derive_testident(args.host_name, args.service_description),
+        "TEST_SOURCE": ctx.config.test_source,
+        "RESULT_DEST": ctx.config.result_dest,
+        "LOGGING": ctx.config.logging,
+        "NAGIOS_HOSTNAME": ctx.hostname,
+        "NAGIOS_SERVICEDESC": ctx.servicedescription,
+        "PWTIMEOUT": str(ctx.config.timeout),
+        "PROBE_LOCATION": ctx.config.probe_location,
+        "TESTIDENT": ctx.testident,
         "TERM": "dumb",
         "FORCE_COLOR": "false",
-        "CEP_STARTED": started_str,
+        "CEP_STARTED": ctx.started_str,
     }
 
-    if args.debug:
+    if ctx.config.debug:
         env["DEBUG"] = "1"
 
-    if args.headed:
+    if ctx.config.headed:
         env["HEADED"] = "1"
 
-    env["BROWSER"] = args.browser
+    env["BROWSER"] = ctx.config.browser
 
     # Spectate mode: pass through slow-motion and highlight timing
     for passthrough in ("CEP_VISION_HIGHLIGHT_MS", "CEP_SLOW_MO"):
@@ -498,32 +593,32 @@ def build_env_vars(args, started_str: str = "") -> Dict[str, str]:
             env[passthrough] = val
 
     # S3 credentials (when S3 plugins active)
-    if args.s3_endpoint:
-        env["S3_ENDPOINT"] = args.s3_endpoint
-    if args.aws_access_key_id:
-        env["AWS_ACCESS_KEY_ID"] = args.aws_access_key_id
-    if args.aws_secret_access_key:
-        env["AWS_SECRET_ACCESS_KEY"] = args.aws_secret_access_key
-    if args.s3_bucket:
-        env["S3_BUCKET"] = args.s3_bucket
-    if args.s3_report_bucket:
-        env["S3_REPORT_BUCKET"] = args.s3_report_bucket
-    if args.s3_report_path:
-        env["REPORT_PATH"] = args.s3_report_path
+    if ctx.config.s3_endpoint:
+        env["S3_ENDPOINT"] = ctx.config.s3_endpoint
+    if ctx.config.aws_access_key_id:
+        env["AWS_ACCESS_KEY_ID"] = ctx.config.aws_access_key_id
+    if ctx.config.aws_secret_access_key:
+        env["AWS_SECRET_ACCESS_KEY"] = ctx.config.aws_secret_access_key
+    if ctx.config.s3_bucket:
+        env["S3_BUCKET"] = ctx.config.s3_bucket
+    if ctx.config.s3_report_bucket:
+        env["S3_REPORT_BUCKET"] = ctx.config.s3_report_bucket
+    if ctx.config.s3_report_path:
+        env["REPORT_PATH"] = ctx.config.s3_report_path
 
     # Loki credentials (when logging=loki)
-    if args.loki_endpoint:
-        env["LOKI_ENDPOINT"] = args.loki_endpoint
-    if args.loki_user:
-        env["LOKI_USER"] = args.loki_user
-    if args.loki_password:
-        env["LOKI_PASSWORD"] = args.loki_password
-    if args.loki_proxy:
-        env["LOKI_PROXY"] = args.loki_proxy
+    if ctx.config.loki_endpoint:
+        env["LOKI_ENDPOINT"] = ctx.config.loki_endpoint
+    if ctx.config.loki_user:
+        env["LOKI_USER"] = ctx.config.loki_user
+    if ctx.config.loki_password:
+        env["LOKI_PASSWORD"] = ctx.config.loki_password
+    if ctx.config.loki_proxy:
+        env["LOKI_PROXY"] = ctx.config.loki_proxy
 
     # Naemon state info
-    if args.current_status:
-        env["NAGIOS_CURRENT_STATUS"] = args.current_status
+    if ctx.config.current_status:
+        env["NAGIOS_CURRENT_STATUS"] = ctx.config.current_status
 
     return env
 
@@ -532,13 +627,10 @@ def build_env_vars(args, started_str: str = "") -> Dict[str, str]:
 # Podman command building (T008)
 # ---------------------------------------------------------------------------
 
-def build_podman_command(container_bin: str, container_name: str, args, env_vars: Dict[str, str],
-                         result_dir: str) -> List[str]:
-    """Build complete podman run command.
-
-    result_dir: already-resolved host path to mount as /home/pwuser/results.
-    """
-    cgroup_parent = container_name.replace("-", "_") + ".slice"
+def build_podman_command(ctx: RunContext, container_bin: str,
+                         env_vars: Dict[str, str]) -> List[str]:
+    """Build complete podman run command."""
+    cgroup_parent = ctx.container_name.replace("-", "_") + ".slice"
 
     cmd = [
         container_bin,
@@ -547,13 +639,13 @@ def build_podman_command(container_bin: str, container_name: str, args, env_vars
         "--interactive",
         "--log-driver=none",
         "--hostname", os.uname().nodename,
-        "--name", container_name,
+        "--name", ctx.container_name,
         "--cgroup-parent", cgroup_parent,
     ]
 
     # Resource limits (FR-006: CPU hardcoded at 2)
     cmd.extend(["--cpus", str(DEFAULT_CPU_COUNT)])
-    memory_limit = args.memory_limit if args.memory_limit else DEFAULT_MEMORY_LIMIT
+    memory_limit = ctx.config.memory_limit if ctx.config.memory_limit else DEFAULT_MEMORY_LIMIT
     if memory_limit and memory_limit[-1] not in "bkmg":
         memory_limit += "g"
     cmd.extend(["--memory", memory_limit])
@@ -563,19 +655,17 @@ def build_podman_command(container_bin: str, container_name: str, args, env_vars
         cmd.extend(["--env", f"{key}={value}"])
 
     # Conditional volume mounts
-    hostname = args.host_name
-    servicedescription = args.service_description
-    test_dir = resolve_path_template(args.test_dir, hostname, servicedescription)
+    test_dir = resolve_path_template(ctx.config.test_dir, ctx)
 
-    if args.test_source == "local":
+    if ctx.config.test_source == "local":
         cmd.extend(["--volume", f"{os.path.abspath(test_dir)}:/home/pwuser/tests:ro,z"])
-    cmd.extend(["--volume", f"{os.path.abspath(result_dir)}:/home/pwuser/results:rw,z"])
-    if args.test_source == "s3":
-        cache_dir = args.testscripts_cache
+    cmd.extend(["--volume", f"{os.path.abspath(ctx.result_dir)}:/home/pwuser/results:rw,z"])
+    if ctx.config.test_source == "s3":
+        cache_dir = ctx.config.testscripts_cache
         cmd.extend(["--volume", f"{os.path.abspath(cache_dir)}:/home/pwuser/testscripts-cache:rw,z"])
 
     # Headed mode: display forwarding for debug
-    if args.headed:
+    if ctx.config.headed:
         cmd.extend([
             f"--userns=keep-id:uid={CONTAINER_UID},gid={CONTAINER_GID}",
             "--security-opt", "label=disable",
@@ -615,10 +705,10 @@ def build_podman_command(container_bin: str, container_name: str, args, env_vars
                 ])
 
     # Shell mode: replace entrypoint with bash
-    if args.shell:
+    if ctx.config.shell:
         cmd.extend(["--tty", "--interactive", "--entrypoint", "bash"])
 
-    cmd.append(args.image)
+    cmd.append(ctx.config.image)
     return cmd
 
 
@@ -887,14 +977,14 @@ def check_duplicate_container(stderr: str) -> bool:
 # Report URL template resolution (T023)
 # ---------------------------------------------------------------------------
 
-def resolve_report_url(template: str, hostname: str, servicedescription: str,
-                       testident: str, probe_location: str, s3_report_bucket: str,
+def resolve_report_url(template: str, ctx: RunContext,
+                       probe_location: str, s3_report_bucket: str,
                        timestamp: str) -> str:
     """Resolve report URL template variables."""
     url = template
-    url = url.replace("%h", hostname)
-    url = url.replace("%s", servicedescription)
-    url = url.replace("%i", testident)
+    url = url.replace("%h", ctx.hostname)
+    url = url.replace("%s", ctx.servicedescription)
+    url = url.replace("%i", ctx.testident)
     url = url.replace("%l", probe_location)
     url = url.replace("%b", s3_report_bucket or "")
     url = url.replace("%t", timestamp)
@@ -1256,22 +1346,61 @@ def main() -> int:
     started_str = str(int(start_time))
 
     # ---------------------------------------------------------------------------
+    # Build typed CLI argument wrapper (010-run-context)
+    # ---------------------------------------------------------------------------
+    config = RunConfig(
+        host_name=args.host_name,
+        service_description=args.service_description,
+        image=args.image,
+        probe_location=args.probe_location,
+        test_source=args.test_source,
+        result_dest=args.result_dest,
+        logging=args.logging,
+        test_dir=args.test_dir,
+        result_dir=args.result_dir,
+        testscripts_cache=args.testscripts_cache,
+        report_retention=args.report_retention,
+        timeout=args.timeout,
+        memory_limit=args.memory_limit,
+        debug=args.debug,
+        shell=args.shell,
+        headed=args.headed,
+        browser=args.browser,
+        report_url=args.report_url,
+        href_target=args.href_target,
+        registry_username=args.registry_username,
+        registry_password=args.registry_password,
+        s3_endpoint=args.s3_endpoint,
+        aws_access_key_id=args.aws_access_key_id,
+        aws_secret_access_key=args.aws_secret_access_key,
+        s3_bucket=args.s3_bucket,
+        s3_report_bucket=args.s3_report_bucket,
+        s3_report_path=args.s3_report_path,
+        s3_report_url=args.s3_report_url,
+        loki_endpoint=args.loki_endpoint,
+        loki_user=args.loki_user,
+        loki_password=args.loki_password,
+        loki_proxy=args.loki_proxy,
+        current_status=args.current_status,
+    )
+
+    # ---------------------------------------------------------------------------
     # Logging setup (T032)
     # ---------------------------------------------------------------------------
     omd_root = os.environ.get("OMD_ROOT", "")
     log_path = omd_root + "/var/log/check_cep.log"
 
-    logger.setLevel(logging.DEBUG if args.debug else logging.CRITICAL)
+    logger.setLevel(logging.DEBUG if config.debug else logging.CRITICAL)
     try:
         file_handler = RotatingFileHandler(log_path, maxBytes=LOG_MAX_BYTES, backupCount=LOG_BACKUP_COUNT)
         formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
         file_handler.setFormatter(formatter)
-        file_handler.setLevel(logging.DEBUG if args.debug else logging.CRITICAL)
+        file_handler.setLevel(logging.DEBUG if config.debug else logging.CRITICAL)
         logger.addHandler(file_handler)
     except (OSError, IOError):
         pass  # Log dir may not exist outside OMD
 
-    if args.debug:
+    if config.debug:
         console_handler = logging.StreamHandler()
         console_handler.setFormatter(logging.Formatter("%(asctime)s - %(levelname)s - %(message)s"))
         console_handler.setLevel(logging.DEBUG)
@@ -1287,14 +1416,14 @@ def main() -> int:
     # ---------------------------------------------------------------------------
     # Browser conflict validation
     # ---------------------------------------------------------------------------
-    if args.browser == "lightpanda" and args.headed:
+    if config.browser == "lightpanda" and config.headed:
         return nagios_exit("UNKNOWN",
                            "--headed is not supported with --browser lightpanda (headless-only browser)")
 
     # ---------------------------------------------------------------------------
     # Headed mode pre-flight
     # ---------------------------------------------------------------------------
-    if args.headed:
+    if config.headed:
         headed_error = validate_headed_mode()
         if headed_error:
             return nagios_exit("UNKNOWN", headed_error)
@@ -1302,24 +1431,38 @@ def main() -> int:
             setup_x11_access()
 
     # ---------------------------------------------------------------------------
-    # Derive names and paths
+    # Build run context (010-run-context)
     # ---------------------------------------------------------------------------
-    hostname = args.host_name
-    servicedescription = args.service_description
-    testname = derive_testname(hostname, servicedescription)
-    testident = derive_testident(hostname, servicedescription)
-    container_name = sanitize_container_name(testname)
-    result_dir = resolve_path_template(args.result_dir, hostname, servicedescription, started=started_str)
+    _testname = derive_testname(config.host_name, config.service_description)
+    _testident = derive_testident(config.host_name, config.service_description)
+    _result_dir = config.result_dir.replace("%h", config.host_name).replace("%s", config.service_description)
+    if started_str:
+        _result_dir = _result_dir.replace("%t", started_str)
+    ctx = RunContext(
+        hostname=config.host_name,
+        servicedescription=config.service_description,
+        testname=_testname,
+        testident=_testident,
+        container_name=sanitize_container_name(_testname),
+        start_time=start_time,
+        started_str=started_str,
+        timeout_deadline=start_time + config.timeout,
+        result_dir=_result_dir,
+        omd_root=omd_root,
+        pid_file=os.path.join(omd_root or "/tmp", "var", "tmp", f"check_cep.{_testident}.pid"),
+        config=config,
+    )
+    logger.debug("RunContext: %s", ctx)
 
     # ---------------------------------------------------------------------------
     # PID file concurrency check (T015)
     # ---------------------------------------------------------------------------
-    os.makedirs(result_dir, mode=PERM_WORLD_RWX, exist_ok=True)
-    os.chmod(result_dir, PERM_WORLD_RWX)
+    os.makedirs(ctx.result_dir, mode=PERM_WORLD_RWX, exist_ok=True)
+    os.chmod(ctx.result_dir, PERM_WORLD_RWX)
     # Files and subdirs from previous runs are owned by the site user.
     # The container's pwuser maps to a sub-uid of the site user and cannot
     # overwrite them — chmod everything in the result tree open.
-    for dirpath, dirnames, filenames in os.walk(result_dir):
+    for dirpath, dirnames, filenames in os.walk(ctx.result_dir):
         for d in dirnames:
             try:
                 os.chmod(os.path.join(dirpath, d), PERM_WORLD_RWX)
@@ -1333,8 +1476,8 @@ def main() -> int:
 
     # S3 testscripts cache needs the same world-writable treatment so the
     # container's pwuser (mapped to a sub-uid) can create subdirs.
-    if args.test_source == "s3":
-        cache_dir = args.testscripts_cache
+    if ctx.config.test_source == "s3":
+        cache_dir = ctx.config.testscripts_cache
         os.makedirs(cache_dir, mode=PERM_WORLD_RWX, exist_ok=True)
         os.chmod(cache_dir, PERM_WORLD_RWX)
         for dirpath, dirnames, filenames in os.walk(cache_dir):
@@ -1344,35 +1487,33 @@ def main() -> int:
                 except OSError:
                     pass
 
-    omd_tmp = os.path.join(omd_root or "/tmp", "var", "tmp")
-    os.makedirs(omd_tmp, mode=PERM_WORLD_RWX, exist_ok=True)
-    pid_file = os.path.join(omd_tmp, f"check_cep.{testident}.pid")
-    existing_pid = check_pid_file(pid_file)
+    os.makedirs(os.path.dirname(ctx.pid_file), mode=PERM_WORLD_RWX, exist_ok=True)
+    existing_pid = check_pid_file(ctx.pid_file)
     if existing_pid is not None:
-        return nagios_exit("UNKNOWN", f"test {servicedescription} duplicate, "
+        return nagios_exit("UNKNOWN", f"test {ctx.servicedescription} duplicate, "
                           f"process with PID {existing_pid} is already running")
 
-    write_pid_file(pid_file)
+    write_pid_file(ctx.pid_file)
 
     # ---------------------------------------------------------------------------
     # Container cleanup (T016)
     # ---------------------------------------------------------------------------
-    container_cleanup(containerenv.container_bin, container_name)
+    container_cleanup(containerenv.container_bin, ctx.container_name)
 
     # ---------------------------------------------------------------------------
     # Build and execute container (T007, T008, T017)
     # ---------------------------------------------------------------------------
-    env_vars = build_env_vars(args, started_str)
-    cmd = build_podman_command(containerenv.container_bin, container_name, args, env_vars, result_dir)
+    env_vars = build_env_vars(ctx)
+    cmd = build_podman_command(ctx, containerenv.container_bin, env_vars)
 
     # Start cgroup poller (T027)
     cgroup_poller = None
     if containerenv.has_cgroups2:
-        cgroup_poller = CgroupPoller(container_name, DEFAULT_CPU_COUNT)
+        cgroup_poller = CgroupPoller(ctx.container_name, DEFAULT_CPU_COUNT)
         cgroup_poller.start()
 
     container_start_time = time.time()
-    stdout, stderr, returncode = execute_container(cmd, shell_mode=args.shell)
+    stdout, stderr, returncode = execute_container(cmd, shell_mode=ctx.config.shell)
 
     # Stop cgroup poller
     if cgroup_poller:
@@ -1381,10 +1522,10 @@ def main() -> int:
     wall_duration = int(time.time() - container_start_time)
 
     # Cleanup PID file
-    remove_pid_file(pid_file)
+    remove_pid_file(ctx.pid_file)
 
     # Shell mode: just exit
-    if args.shell:
+    if ctx.config.shell:
         return returncode
 
     # ---------------------------------------------------------------------------
@@ -1392,10 +1533,10 @@ def main() -> int:
     # ---------------------------------------------------------------------------
     if (returncode == EXIT_AUTH_REQUIRED
             and b"Authentication is required" in stderr
-            and args.registry_username):
+            and ctx.config.registry_username):
         stdout, stderr, returncode = retry_with_auth(
-            containerenv.container_bin, cmd, args.image,
-            args.registry_username, args.registry_password)
+            containerenv.container_bin, cmd, ctx.config.image,
+            ctx.config.registry_username, ctx.config.registry_password)
     elif returncode == EXIT_AUTH_REQUIRED:
         returncode = EXIT_CRITICAL
 
@@ -1412,13 +1553,13 @@ def main() -> int:
     container_output = ""
     has_stderr_in_steps = False
 
-    steps_json_path = os.path.join(result_dir, "steps.json")
+    steps_json_path = os.path.join(ctx.result_dir, "steps.json")
     steps_data = parse_steps_json(steps_json_path)
 
     if steps_data is not None:
         perfdata.extend(extract_perfdata_from_steps(steps_data))
         perfdata.extend(extract_nagios_perfdata_from_stdout(steps_data))
-        container_output, has_stderr_in_steps = extract_output_from_steps(steps_data, debug=args.debug)
+        container_output, has_stderr_in_steps = extract_output_from_steps(steps_data, debug=ctx.config.debug)
     else:
         container_output = stdout_str
         if stderr_str:
@@ -1481,14 +1622,9 @@ def main() -> int:
     # ---------------------------------------------------------------------------
     # Report cleanup (US2, US3 — 009-report-management)
     # ---------------------------------------------------------------------------
-    if args.report_retention is not None and "%t" in args.result_dir:
-        timeout_deadline = start_time + args.timeout
-        parent_dir = os.path.dirname(result_dir)
+    if ctx.config.report_retention is not None and "%t" in ctx.config.result_dir:
         cleanup_plugin = LocalCleanup()
-        cleanup_result = run_cleanup(
-            cleanup_plugin, parent_dir, result_dir,
-            args.report_retention, timeout_deadline,
-        )
+        cleanup_result = run_cleanup(cleanup_plugin, ctx)
         logger.debug(
             f"Cleanup: deleted={cleanup_result.deleted}, "
             f"skipped={cleanup_result.skipped}, "
@@ -1497,7 +1633,7 @@ def main() -> int:
 
     # Read test-meta.json for started timestamp (for report URL)
     test_meta = {}
-    meta_path = os.path.join(result_dir, "test-meta.json")
+    meta_path = os.path.join(ctx.result_dir, "test-meta.json")
     if os.path.exists(meta_path):
         try:
             with open(meta_path, "r") as f:
@@ -1507,32 +1643,32 @@ def main() -> int:
 
     # Build report annotation (T024)
     annotation = ""
-    if args.report_url:
-        timestamp = test_meta.get("started", started_str)
+    if ctx.config.report_url:
+        timestamp = test_meta.get("started", ctx.started_str)
         resolved_url = resolve_report_url(
-            args.report_url, hostname, servicedescription, testident,
-            args.probe_location, args.s3_report_bucket or "", timestamp)
-        annotation = f' <a href="{urllib.parse.quote(resolved_url, safe=":/?&=")}" target="{args.href_target}">Report</a>'
+            ctx.config.report_url, ctx,
+            ctx.config.probe_location, ctx.config.s3_report_bucket or "", timestamp)
+        annotation = f' <a href="{urllib.parse.quote(resolved_url, safe=":/?&=")}" target="{ctx.config.href_target}">Report</a>'
 
     # Exit code priority chain (T020, T031)
     if oom_killed:
-        exit_code = nagios_exit("CRITICAL", f"test {servicedescription} OOM killed{annotation}",
+        exit_code = nagios_exit("CRITICAL", f"test {ctx.servicedescription} OOM killed{annotation}",
                                perfdata_str, container_output)
     elif timed_out:
-        exit_code = nagios_exit("CRITICAL", f"test {servicedescription} timed out{annotation}",
+        exit_code = nagios_exit("CRITICAL", f"test {ctx.servicedescription} timed out{annotation}",
                                perfdata_str, container_output)
     elif returncode != 0 and not duplicate:
-        exit_code = nagios_exit("CRITICAL", f"test {servicedescription} failed{annotation}",
+        exit_code = nagios_exit("CRITICAL", f"test {ctx.servicedescription} failed{annotation}",
                                perfdata_str, container_output)
     elif has_stderr_in_steps and returncode == 0:
-        exit_code = nagios_exit("WARNING", f"test {servicedescription} succeeded{annotation}",
+        exit_code = nagios_exit("WARNING", f"test {ctx.servicedescription} succeeded{annotation}",
                                perfdata_str, container_output)
     elif duplicate:
         exit_code = nagios_exit("UNKNOWN",
-                               f"test {servicedescription} duplicate{annotation}, running on host {os.uname()[1]}",
+                               f"test {ctx.servicedescription} duplicate{annotation}, running on host {os.uname()[1]}",
                                perfdata_str, container_output)
     else:
-        exit_code = nagios_exit("OK", f"test {servicedescription} succeeded{annotation}",
+        exit_code = nagios_exit("OK", f"test {ctx.servicedescription} succeeded{annotation}",
                                perfdata_str, container_output)
 
     # S3 failure appended as warning text (doesn't change exit code)
@@ -1540,7 +1676,7 @@ def main() -> int:
         print("REPORT UPLOAD TO S3 FAILED")
 
     # Retention warning (FR-017): --report-retention without %t in --result-dir
-    if args.report_retention is not None and "%t" not in args.result_dir:
+    if ctx.config.report_retention is not None and "%t" not in ctx.config.result_dir:
         print("WARNING: --report-retention has no effect without %t in --result-dir")
 
     return exit_code

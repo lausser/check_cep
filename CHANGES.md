@@ -6,6 +6,40 @@ available in the next container image build.
 
 ---
 
+## Spec 010 — RunContext: Shared Execution Context
+
+**Branch**: `010-run-context`
+
+### Summary
+
+Introduced two frozen dataclasses to eliminate function signature churn across the plugin:
+
+- **`RunConfig`** (33 typed fields): immutable wrapper for all CLI arguments, replacing raw `argparse.Namespace` access after argument parsing.
+- **`RunContext`** (12 fields): immutable per-run state combining identity (`hostname`, `servicedescription`, `testname`, `testident`, `container_name`), timing (`start_time`, `started_str`, `timeout_deadline`), paths (`result_dir`, `pid_file`, `omd_root`), and the nested `RunConfig`.
+
+### Migrated Functions
+
+Five functions now accept `RunContext` instead of individual shared-state parameters:
+
+| Function | Before | After |
+|---|---|---|
+| `resolve_report_url` | 7 args | 5 args |
+| `build_podman_command` | 5 args | 3 args |
+| `run_cleanup` | 5 args | 2 args |
+| `build_env_vars` | 2 args | 1 arg |
+| `resolve_path_template` | 4 args | 2 args |
+
+Total positional parameters reduced from 23 to 13.
+
+### Other Changes
+
+- All `args.*` access is now confined to the `RunConfig` constructor; the rest of `main()` reads from `config.*` or `ctx.*`.
+- `RunContext` is logged at `DEBUG` level immediately after construction.
+- `main()` is structured in four clearly separated phases: parse + `RunConfig`, validate, `RunContext` construction, run + format.
+- New test helper module `tests/unit/test_run_context.py` with `make_config(**overrides)` and `make_ctx(**overrides)` factories for single-override unit test setup.
+
+---
+
 ## Spec 009 — Local Report Housekeeping
 
 **Branch**: `009-report-management`
