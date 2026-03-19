@@ -6,6 +6,21 @@ available in the next container image build.
 
 ---
 
+## Spec 011 — Externalize Demo Configurations
+
+**Branch**: `011-externalize-demo-configs`
+
+### Summary
+
+Moved inline demo file content out of `setup-omd-site.sh` into a new `omd-demo/` directory that mirrors the OMD site root. The setup script now does a recursive copy instead of generating files via heredocs.
+
+### Changes
+
+- New `omd-demo/etc/` tree containing the demo Playwright test (`consol.test.ts`, `playwright.config.ts`) and a Naemon monitoring config (`cep-demo.cfg`) with portable `$USER2$`/`$USER4$` macros.
+- `setup-omd-site.sh`: replaced heredoc section with `cp -r omd-demo/etc/ $OMD_ROOT/etc/`, added validation for missing/empty `omd-demo/`, extended `chown` scope for the Naemon config path, added web symlink (`var/www/check_cep` → `var/tmp/check_cep`).
+
+---
+
 ## Spec 010 — RunContext: Shared Execution Context
 
 **Branch**: `010-run-context`

@@ -66,41 +66,25 @@ echo "  [ok] test source dir -> $OMD_ROOT/etc/check_cep/tests"
 mkdir -p "$OMD_ROOT/var/tmp/check_cep"
 echo "  [ok] result dir      -> $OMD_ROOT/var/tmp/check_cep"
 
+ln -sfn "$OMD_ROOT/var/tmp/check_cep" "$OMD_ROOT/var/www/check_cep"
+echo "  [ok] web symlink     -> $OMD_ROOT/var/www/check_cep"
+
 # ---------------------------------------------------------------------------
-# 3. Demo starter test  (DEMOHOST / DEMOSERVICE)
+# 3. Demo configuration (from omd-demo/ in the repository)
 # ---------------------------------------------------------------------------
 
-DEMO_DIR="$OMD_ROOT/etc/check_cep/tests/DEMOHOST/DEMOSERVICE"
-mkdir -p "$DEMO_DIR/functions"
-mkdir -p "$DEMO_DIR/variables"
-mkdir -p "$DEMO_DIR/bla/blub"
+DEMO_SRC="$REPO_DIR/omd-demo"
+if [[ ! -d "$DEMO_SRC" ]]; then
+    echo "ERROR: $DEMO_SRC not found. The omd-demo/ folder is missing from the repository." >&2
+    exit 1
+fi
 
-cat > "$DEMO_DIR/bla/blub/playwright.config.ts" << 'PWCONFIG'
-import { defineConfig } from '@playwright/test';
-
-export default defineConfig({
-  testDir: './',
-  timeout: 30000,
-  use: {
-    headless: true,
-    viewport: { width: 1280, height: 720 },
-  },
-  projects: [
-    { name: 'chromium', use: { browserName: 'chromium' } },
-  ],
-});
-PWCONFIG
-
-cat > "$DEMO_DIR/bla/blub/consol.test.ts" << 'PWTEST'
-import { test, expect } from '@playwright/test';
-
-test('consol.de has Consulting & Solutions', async ({ page }) => {
-  await page.goto('https://www.consol.de');
-  await expect(page.locator('body')).toContainText('Consulting & Solutions');
-});
-PWTEST
-
-echo "  [ok] demo test       -> $DEMO_DIR"
+if [[ -z "$(ls -A "$DEMO_SRC/etc/" 2>/dev/null)" ]]; then
+    echo "  [skip] omd-demo/etc/ is empty — skipping demo installation"
+else
+    cp -r "$DEMO_SRC/etc/." "$OMD_ROOT/etc/"
+    echo "  [ok] demo config     -> copied omd-demo/etc/ to $OMD_ROOT/etc/"
+fi
 
 # ---------------------------------------------------------------------------
 # 4. Container build context  ($OMD_ROOT/etc/check_cep/container/)
@@ -115,19 +99,20 @@ cp -r "$REPO_DIR/src/container/." "$CONTAINER_DIR/"
 echo "  [ok] container build context -> $CONTAINER_DIR"
 
 # ---------------------------------------------------------------------------
-# 4. Root mode: transfer ownership to the site user
+# 5. Root mode: transfer ownership to the site user
 # ---------------------------------------------------------------------------
 
 if [[ -n "$SITE_NAME" ]]; then
     chown -R "$SITE_NAME:$SITE_NAME" \
         "$OMD_ROOT/etc/check_cep" \
+        "$OMD_ROOT/etc/naemon/conf.d/consol" \
         "$OMD_ROOT/var/tmp/check_cep" \
         "$PLUGIN_DIR/check_cep"
     echo "  [ok] ownership -> $SITE_NAME:$SITE_NAME"
 fi
 
 # ---------------------------------------------------------------------------
-# 5. Summary
+# 6. Summary
 # ---------------------------------------------------------------------------
 
 cat <<EOF
@@ -137,6 +122,10 @@ Done. Next steps:
   Build the container image (adjust the Playwright version as needed):
     cd $CONTAINER_DIR
     podman build --build-arg PLAYWRIGHT_VERSION=v1.58.2 -t localhost/check_cep:latest .
+
+  A demo test (DEMOHOST/DEMOSERVICE) and Naemon config were deployed from omd-demo/:
+    $OMD_ROOT/etc/check_cep/tests/DEMOHOST/DEMOSERVICE/
+    $OMD_ROOT/etc/naemon/conf.d/consol/cep/custom/cep-demo.cfg
 
   Place your Playwright tests under:
     $OMD_ROOT/etc/check_cep/tests/<hostname>/<service>/
