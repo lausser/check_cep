@@ -19,17 +19,17 @@ Introduced two frozen dataclasses to eliminate function signature churn across t
 
 ### Migrated Functions
 
-Five functions now accept `RunContext` instead of individual shared-state parameters:
+Four functions now accept `RunContext` instead of individual shared-state parameters. `resolve_path_template` remains a standalone string utility (no RunContext dependency).
 
 | Function | Before | After |
 |---|---|---|
-| `resolve_report_url` | 7 args | 5 args |
+| `resolve_report_url` | 7 args | 2 args (`ctx`, `timestamp`) |
 | `build_podman_command` | 5 args | 3 args |
 | `run_cleanup` | 5 args | 2 args |
 | `build_env_vars` | 2 args | 1 arg |
-| `resolve_path_template` | 4 args | 2 args |
+| `resolve_path_template` | 4 args | 4 args (unchanged, pure string utility) |
 
-Total positional parameters reduced from 23 to 13.
+Total positional parameters reduced from 23 to 12.
 
 ### Other Changes
 
@@ -37,6 +37,7 @@ Total positional parameters reduced from 23 to 13.
 - `RunContext` is logged at `DEBUG` level immediately after construction.
 - `main()` is structured in four clearly separated phases: parse + `RunConfig`, validate, `RunContext` construction, run + format.
 - New test helper module `tests/unit/test_run_context.py` with `make_config(**overrides)` and `make_ctx(**overrides)` factories for single-override unit test setup.
+- Deleted `docs/CONTEXT.md` (superseded by `specs/010-run-context/`).
 
 ---
 

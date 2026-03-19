@@ -308,11 +308,13 @@ def derive_testident(hostname: str, servicedescription: str) -> str:
     return urllib.parse.quote(f"{hostname}__{servicedescription}", safe="")
 
 
-def resolve_path_template(template: str, ctx: "RunContext") -> str:
+def resolve_path_template(template: str, hostname: str,
+                          servicedescription: str,
+                          started_str: str = "") -> str:
     """Replace %h, %s, and %t template variables in path strings."""
-    result = template.replace("%h", ctx.hostname).replace("%s", ctx.servicedescription)
-    if ctx.started_str:
-        result = result.replace("%t", ctx.started_str)
+    result = template.replace("%h", hostname).replace("%s", servicedescription)
+    if started_str:
+        result = result.replace("%t", started_str)
     return result
 
 
@@ -655,7 +657,8 @@ def build_podman_command(ctx: RunContext, container_bin: str,
         cmd.extend(["--env", f"{key}={value}"])
 
     # Conditional volume mounts
-    test_dir = resolve_path_template(ctx.config.test_dir, ctx)
+    test_dir = resolve_path_template(ctx.config.test_dir, ctx.hostname,
+                                     ctx.servicedescription, ctx.started_str)
 
     if ctx.config.test_source == "local":
         cmd.extend(["--volume", f"{os.path.abspath(test_dir)}:/home/pwuser/tests:ro,z"])
@@ -977,16 +980,14 @@ def check_duplicate_container(stderr: str) -> bool:
 # Report URL template resolution (T023)
 # ---------------------------------------------------------------------------
 
-def resolve_report_url(template: str, ctx: RunContext,
-                       probe_location: str, s3_report_bucket: str,
-                       timestamp: str) -> str:
+def resolve_report_url(ctx: RunContext, timestamp: str) -> str:
     """Resolve report URL template variables."""
-    url = template
+    url = ctx.config.report_url
     url = url.replace("%h", ctx.hostname)
     url = url.replace("%s", ctx.servicedescription)
     url = url.replace("%i", ctx.testident)
-    url = url.replace("%l", probe_location)
-    url = url.replace("%b", s3_report_bucket or "")
+    url = url.replace("%l", ctx.config.probe_location)
+    url = url.replace("%b", ctx.config.s3_report_bucket or "")
     url = url.replace("%t", timestamp)
     return url
 
@@ -1435,9 +1436,6 @@ def main() -> int:
     # ---------------------------------------------------------------------------
     _testname = derive_testname(config.host_name, config.service_description)
     _testident = derive_testident(config.host_name, config.service_description)
-    _result_dir = config.result_dir.replace("%h", config.host_name).replace("%s", config.service_description)
-    if started_str:
-        _result_dir = _result_dir.replace("%t", started_str)
     ctx = RunContext(
         hostname=config.host_name,
         servicedescription=config.service_description,
@@ -1447,7 +1445,10 @@ def main() -> int:
         start_time=start_time,
         started_str=started_str,
         timeout_deadline=start_time + config.timeout,
-        result_dir=_result_dir,
+        result_dir=resolve_path_template(config.result_dir,
+                                         config.host_name,
+                                         config.service_description,
+                                         started_str),
         omd_root=omd_root,
         pid_file=os.path.join(omd_root or "/tmp", "var", "tmp", f"check_cep.{_testident}.pid"),
         config=config,
@@ -1645,9 +1646,7 @@ def main() -> int:
     annotation = ""
     if ctx.config.report_url:
         timestamp = test_meta.get("started", ctx.started_str)
-        resolved_url = resolve_report_url(
-            ctx.config.report_url, ctx,
-            ctx.config.probe_location, ctx.config.s3_report_bucket or "", timestamp)
+        resolved_url = resolve_report_url(ctx, timestamp)
         annotation = f' <a href="{urllib.parse.quote(resolved_url, safe=":/?&=")}" target="{ctx.config.href_target}">Report</a>'
 
     # Exit code priority chain (T020, T031)
