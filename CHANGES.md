@@ -18,6 +18,7 @@ Moved inline demo file content out of `setup-omd-site.sh` into a new `omd-demo/`
 
 - New `omd-demo/etc/` tree containing the demo Playwright test (`consol.test.ts`, `playwright.config.ts`) and a Naemon monitoring config (`cep-demo.cfg`) with portable `$USER2$`/`$USER4$` macros.
 - `setup-omd-site.sh`: replaced heredoc section with `cp -r omd-demo/etc/ $OMD_ROOT/etc/`, added validation for missing/empty `omd-demo/`, extended `chown` scope for the Naemon config path, added web symlink (`var/www/check_cep` → `var/tmp/check_cep`).
+- make the demo test case fail from time to time (1 out of 10 on a random basis)
 
 ---
 
