@@ -6,6 +6,21 @@ available in the next container image build.
 
 ---
 
+## Spec 012 — Failure Screenshot in Playwright Report
+
+**Branch**: `012-failure-screenshot`
+
+### Summary
+
+Changed the demo `playwright.config.ts` template so that failed tests show a full-page screenshot in the HTML report instead of a long, unreadable HTML page dump.
+
+### Changes
+
+- Added `screenshot: { mode: 'only-on-failure', fullPage: true }` to the `use` section — Playwright now captures a full-page screenshot at the moment of failure.
+- Existing user configs are not modified automatically; see `specs/012-failure-screenshot/quickstart.md` for manual migration.
+
+---
+
 ## Spec 011 — Externalize Demo Configurations
 
 **Branch**: `011-externalize-demo-configs`
