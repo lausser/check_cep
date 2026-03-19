@@ -96,6 +96,25 @@ const PORT = 9323;
           await page.waitForTimeout(500);
         }
         await page.waitForTimeout(2500);
+
+        // Scroll down stepwise to the failure screenshot so the viewer
+        // sees it's on the same page, just further below.
+        const screenshotImg = page.locator('img.screenshot').first();
+        if (await screenshotImg.count() > 0) {
+          const targetY = await screenshotImg.evaluate(el => {
+            const rect = el.getBoundingClientRect();
+            // Scroll until the bottom of the image is visible with some padding
+            return window.scrollY + rect.bottom - window.innerHeight + 40;
+          });
+          let currentY = await page.evaluate(() => window.scrollY);
+          const step = 50;
+          while (currentY < targetY) {
+            currentY = Math.min(currentY + step, targetY);
+            await page.evaluate(y => window.scrollTo(0, y), currentY);
+            await page.waitForTimeout(80);
+          }
+          await page.waitForTimeout(3000);
+        }
       }
     } else {
       // For passing tests, just pause so viewer can see the steps

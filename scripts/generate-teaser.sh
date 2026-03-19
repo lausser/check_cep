@@ -82,6 +82,7 @@ export default defineConfig({
     viewport: { width: 1280, height: 720 },
     deviceScaleFactor: 1,
     video: { mode: 'on', size: { width: 1280, height: 720 } },
+    screenshot: { mode: 'only-on-failure', fullPage: true },
   },
   projects: [{ name: 'chromium', use: { browserName: 'chromium' } }],
 });
