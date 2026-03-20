@@ -57,17 +57,20 @@ chmod 755 "$PLUGIN_DIR/check_cep"
 echo "  [ok] plugin -> $PLUGIN_DIR/check_cep"
 
 # ---------------------------------------------------------------------------
-# 2. Runtime directories
+# 2. Runtime directories and Thruk settings
 # ---------------------------------------------------------------------------
 
 mkdir -p "$OMD_ROOT/etc/check_cep/tests"
-echo "  [ok] test source dir -> $OMD_ROOT/etc/check_cep/tests"
+echo "  [ok] test source dir   -> $OMD_ROOT/etc/check_cep/tests"
 
 mkdir -p "$OMD_ROOT/var/tmp/check_cep"
-echo "  [ok] result dir      -> $OMD_ROOT/var/tmp/check_cep"
+echo "  [ok] result dir        -> $OMD_ROOT/var/tmp/check_cep"
 
 ln -sfn "$OMD_ROOT/var/tmp/check_cep" "$OMD_ROOT/var/www/check_cep"
-echo "  [ok] web symlink     -> $OMD_ROOT/var/www/check_cep"
+echo "  [ok] web symlink       -> $OMD_ROOT/var/www/check_cep"
+
+sed -i 's/^escape_html_tags=0$/escape_html_tags=1/' $OMD_ROOT/etc/thruk/cgi.cfg
+echo "  [ok] enable html tags  -> $OMD_ROOT/etc/thruk/cgi.cfg"
 
 # ---------------------------------------------------------------------------
 # 3. Demo configuration (from omd-demo/ in the repository)
