@@ -69,7 +69,7 @@ echo "  [ok] result dir        -> $OMD_ROOT/var/tmp/check_cep"
 ln -sfn "$OMD_ROOT/var/tmp/check_cep" "$OMD_ROOT/var/www/check_cep"
 echo "  [ok] web symlink       -> $OMD_ROOT/var/www/check_cep"
 
-sed -i 's/^escape_html_tags=0$/escape_html_tags=1/' $OMD_ROOT/etc/thruk/cgi.cfg
+sed -i 's/^escape_html_tags=1$/escape_html_tags=0/' $OMD_ROOT/etc/thruk/cgi.cfg
 echo "  [ok] enable html tags  -> $OMD_ROOT/etc/thruk/cgi.cfg"
 
 # ---------------------------------------------------------------------------
