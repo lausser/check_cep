@@ -1,0 +1,427 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=1280">
+  <title>Northwire Daily - Busy Homepage Fixture</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: Arial, sans-serif;
+      color: #10233a;
+      background:
+        radial-gradient(circle at 15% 0%, rgba(255, 255, 255, 0.8), transparent 18%),
+        linear-gradient(180deg, #f2f5fb 0%, #eef3f9 52%, #f7f8fc 100%);
+    }
+    .masthead {
+      position: sticky;
+      top: 0;
+      z-index: 8;
+      background: rgba(10, 22, 39, 0.96);
+      color: #f8fafc;
+      box-shadow: 0 14px 30px rgba(15, 23, 42, 0.18);
+    }
+    .masthead-top,
+    .masthead-bottom {
+      width: 1180px;
+      margin: 0 auto;
+      display: flex;
+      align-items: center;
+    }
+    .masthead-top {
+      height: 42px;
+      font-size: 12px;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      color: #cbd5e1;
+      gap: 16px;
+    }
+    .masthead-bottom {
+      height: 54px;
+      gap: 18px;
+    }
+    .brand {
+      font-size: 22px;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      margin-right: 16px;
+    }
+    .nav-link,
+    .ticker-item {
+      color: #cbd5e1;
+      font-size: 13px;
+      text-decoration: none;
+    }
+    .ticker-item.urgent {
+      color: #fde68a;
+      font-weight: 700;
+    }
+    .live-pill {
+      margin-left: auto;
+      padding: 7px 12px;
+      border-radius: 999px;
+      background: rgba(248, 113, 113, 0.16);
+      color: #fecaca;
+      font-size: 12px;
+      font-weight: 700;
+    }
+    .page {
+      width: 1180px;
+      margin: 24px auto 48px;
+      display: grid;
+      grid-template-columns: 1fr 318px;
+      gap: 22px;
+    }
+    .lead-panel,
+    .rail-card,
+    .story-card,
+    .target-story,
+    .result-panel {
+      background: rgba(255, 255, 255, 0.92);
+      border: 1px solid rgba(148, 163, 184, 0.22);
+      border-radius: 24px;
+      box-shadow: 0 18px 40px rgba(15, 23, 42, 0.08);
+    }
+    .lead-panel {
+      padding: 26px;
+      margin-bottom: 20px;
+      background:
+        linear-gradient(135deg, rgba(37, 99, 235, 0.12), rgba(249, 115, 22, 0.07)),
+        rgba(255, 255, 255, 0.94);
+    }
+    .kicker {
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: #2563eb;
+    }
+    .lead-panel h1 {
+      margin-top: 14px;
+      font-size: 34px;
+      line-height: 1.05;
+      max-width: 760px;
+    }
+    .lead-panel p {
+      margin-top: 14px;
+      max-width: 720px;
+      color: #475569;
+      line-height: 1.55;
+      font-size: 15px;
+    }
+    .story-btn,
+    #accept-cookies {
+      border: none;
+      border-radius: 14px;
+      height: 42px;
+      padding: 0 18px;
+      font-family: Arial, sans-serif;
+      font-size: 14px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+    .story-btn {
+      background: #10233a;
+      color: #fff;
+      margin-top: 18px;
+    }
+    .story-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 18px;
+      margin-bottom: 18px;
+    }
+    .story-card,
+    .target-story {
+      padding: 16px;
+    }
+    .story-card .thumb,
+    .target-story .thumb,
+    .rail-card .thumb {
+      height: 110px;
+      border-radius: 18px;
+      margin-bottom: 12px;
+      position: relative;
+      overflow: hidden;
+    }
+    .thumb::after {
+      content: '';
+      position: absolute;
+      width: 92px;
+      height: 92px;
+      border-radius: 50%;
+      right: -20px;
+      bottom: -18px;
+      background: rgba(255, 255, 255, 0.18);
+    }
+    .thumb-blue { background: linear-gradient(135deg, #2563eb, #38bdf8); }
+    .thumb-orange { background: linear-gradient(135deg, #f97316, #fb7185); }
+    .thumb-green { background: linear-gradient(135deg, #14b8a6, #65a30d); }
+    .thumb-purple { background: linear-gradient(135deg, #8b5cf6, #ec4899); }
+    .story-card h2,
+    .target-story h2,
+    .rail-card h2 {
+      font-size: 22px;
+      line-height: 1.1;
+      margin-bottom: 8px;
+    }
+    .story-card h3,
+    .rail-card h3 {
+      font-size: 18px;
+      line-height: 1.2;
+      margin-bottom: 8px;
+    }
+    .story-card p,
+    .target-story p,
+    .rail-card p {
+      color: #64748b;
+      font-size: 13px;
+      line-height: 1.5;
+    }
+    .topic-row {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 10px;
+      flex-wrap: wrap;
+    }
+    .topic-pill {
+      padding: 6px 10px;
+      border-radius: 999px;
+      background: #e0ecff;
+      color: #1d4ed8;
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    .target-story {
+      margin-top: 8px;
+      display: grid;
+      grid-template-columns: 1.25fr 1fr;
+      gap: 16px;
+      align-items: stretch;
+      min-height: 168px;
+    }
+    .target-story[data-opened='true'] {
+      outline: 3px solid rgba(34, 197, 94, 0.25);
+    }
+    .result-panel {
+      margin-top: 18px;
+      padding: 18px 20px;
+      display: none;
+      font-size: 15px;
+      line-height: 1.55;
+      color: #14532d;
+      background: linear-gradient(135deg, rgba(34, 197, 94, 0.12), rgba(255, 255, 255, 0.92));
+    }
+    .result-panel[data-open='true'] {
+      display: block;
+    }
+    .rail {
+      display: grid;
+      gap: 18px;
+      align-content: start;
+    }
+    .rail-card {
+      padding: 16px;
+    }
+    .rail-list {
+      display: grid;
+      gap: 12px;
+      margin-top: 12px;
+    }
+    .rail-item {
+      padding: 12px 14px;
+      border-radius: 16px;
+      background: linear-gradient(90deg, rgba(37, 99, 235, 0.08), rgba(248, 113, 113, 0.06));
+      font-size: 13px;
+      color: #334155;
+      font-weight: 600;
+    }
+    .footer-links {
+      margin-top: 20px;
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+    .footer-link {
+      font-size: 12px;
+      color: #64748b;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+    #cookie-banner {
+      position: fixed;
+      left: 72px;
+      right: 72px;
+      bottom: 22px;
+      z-index: 10;
+      background: rgba(15, 23, 42, 0.96);
+      color: #e2e8f0;
+      border-radius: 22px;
+      box-shadow: 0 26px 48px rgba(15, 23, 42, 0.32);
+      padding: 18px 20px;
+      display: flex;
+      align-items: center;
+      gap: 18px;
+    }
+    #cookie-banner p {
+      font-size: 13px;
+      line-height: 1.55;
+      color: #cbd5e1;
+      flex: 1;
+    }
+    #accept-cookies {
+      background: #22c55e;
+      color: #052e16;
+      min-width: 168px;
+      flex-shrink: 0;
+    }
+    .secondary-link {
+      color: #93c5fd;
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+  </style>
+</head>
+<body data-consent="required" data-opened-story="none">
+  <header class="masthead">
+    <div class="masthead-top">
+      <span class="ticker-item urgent">Breaking</span>
+      <span class="ticker-item">Markets</span>
+      <span class="ticker-item">Live updates</span>
+      <span class="ticker-item">Metro</span>
+      <span class="live-pill">Live now</span>
+    </div>
+    <div class="masthead-bottom">
+      <div class="brand">Northwire Daily</div>
+      <a class="nav-link" href="#">Front page</a>
+      <a class="nav-link" href="#">Markets</a>
+      <a class="nav-link" href="#">Metro</a>
+      <a class="nav-link" href="#">Culture</a>
+      <a class="nav-link" href="#">Live updates</a>
+    </div>
+  </header>
+
+  <main class="page">
+    <section>
+      <article class="lead-panel">
+        <div class="topic-row">
+          <span class="topic-pill">Live updates</span>
+          <span class="topic-pill">Markets</span>
+        </div>
+        <h1>Ports, trains, and policy notes flood the homepage in this deliberate clutter fixture.</h1>
+        <p>
+          The intent is a realistic but stable newsroom layout: repeated action buttons,
+          multiple topic labels, and an overlay that blocks the lower-page target until consent is handled.
+        </p>
+        <button class="story-btn" id="lead-story-button" onclick="openStory('lead-briefing')">Read story</button>
+      </article>
+
+      <div class="story-grid">
+        <article class="story-card" id="story-trains-briefing">
+          <div class="thumb thumb-blue"></div>
+          <div class="topic-row"><span class="topic-pill">Metro</span></div>
+          <h3>Trains briefing pulls commuters into another disrupted morning</h3>
+          <p>Repeated CTA design is intentional. The page should reject broad image matches.</p>
+          <button class="story-btn" onclick="openStory('trains-briefing')">Read story</button>
+        </article>
+
+        <article class="story-card" id="story-market-wrap">
+          <div class="thumb thumb-orange"></div>
+          <div class="topic-row"><span class="topic-pill">Markets</span></div>
+          <h3>Market wrap tracks a late rebound in logistics shares</h3>
+          <p>Another same-looking CTA in a nearby card keeps the search space noisy.</p>
+          <button class="story-btn" onclick="openStory('market-wrap')">Read story</button>
+        </article>
+
+        <article class="story-card" id="story-night-edition">
+          <div class="thumb thumb-purple"></div>
+          <div class="topic-row"><span class="topic-pill">Culture</span></div>
+          <h3>Night edition maps the photo desks behind the headlines</h3>
+          <p>The target story is not this one, even though the CTA is visually identical.</p>
+          <button class="story-btn" onclick="openStory('night-edition')">Read story</button>
+        </article>
+      </div>
+
+      <article class="target-story" id="story-harbor-dossier">
+        <div>
+          <div class="thumb thumb-green"></div>
+        </div>
+        <div>
+          <div class="topic-row">
+            <span class="topic-pill">Deep dive</span>
+            <span class="topic-pill">Live updates</span>
+          </div>
+          <h2>Harbor Dossier: the late bulletin the banner is meant to block</h2>
+          <p>
+            This lower-page feature is the intended target. It stays deterministic,
+            but the cookie banner genuinely sits on top of its CTA until consent is accepted.
+          </p>
+          <button class="story-btn" id="open-target-story" onclick="openStory('harbor-dossier')">Read story</button>
+        </div>
+      </article>
+
+      <article class="result-panel" id="story-result">
+        Harbor Dossier opened. The guided region matched the correct CTA after the banner was dismissed.
+      </article>
+
+      <div class="footer-links">
+        <span class="footer-link">Markets</span>
+        <span class="footer-link">Live updates</span>
+        <span class="footer-link">Editorial standards</span>
+      </div>
+    </section>
+
+    <aside class="rail">
+      <article class="rail-card">
+        <div class="thumb thumb-blue"></div>
+        <div class="topic-row"><span class="topic-pill">Watchlist</span></div>
+        <h2>Side rail keeps adding bright cards and duplicate topic labels</h2>
+        <p>Busy enough to feel real, but still static and solvable.</p>
+        <button class="story-btn" onclick="openStory('rail-watchlist')">Read story</button>
+      </article>
+
+      <article class="rail-card">
+        <div class="topic-row"><span class="topic-pill">Editors' radar</span></div>
+        <div class="rail-list">
+          <div class="rail-item">Markets desk sends another live updates memo</div>
+          <div class="rail-item">Metro board repeats the same dispatch label</div>
+          <div class="rail-item">Culture queue surfaces duplicate callouts</div>
+        </div>
+      </article>
+    </aside>
+  </main>
+
+  <div id="cookie-banner">
+    <p>
+      We use local-only analytics cookies in this fixture to prove that consent dismissal is a real prerequisite.
+      Until accepted, the lower-page feature remains blocked by this banner.
+    </p>
+    <span class="secondary-link">Cookie settings</span>
+    <button id="accept-cookies" onclick="acceptCookies()">Accept essentials</button>
+  </div>
+
+  <script>
+    function acceptCookies() {
+      document.body.setAttribute('data-consent', 'accepted');
+      document.getElementById('cookie-banner').style.display = 'none';
+    }
+
+    function openStory(id) {
+      if (document.body.getAttribute('data-consent') !== 'accepted' && id === 'harbor-dossier') {
+        return;
+      }
+
+      document.body.setAttribute('data-opened-story', id);
+
+      if (id === 'harbor-dossier') {
+        document.getElementById('story-harbor-dossier').setAttribute('data-opened', 'true');
+        document.getElementById('story-result').setAttribute('data-open', 'true');
+      }
+    }
+  </script>
+</body>
+</html>

@@ -1,0 +1,419 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=1280">
+  <title>Northstar Goods - Lighting and Desk Finds</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: Arial, sans-serif;
+      background:
+        radial-gradient(circle at top left, rgba(255, 255, 255, 0.9), transparent 24%),
+        linear-gradient(180deg, #f4f1ea 0%, #eef2f6 46%, #f8fafc 100%);
+      color: #1f2937;
+    }
+    .topbar {
+      height: 70px;
+      background: rgba(16, 24, 40, 0.96);
+      color: #f8fafc;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      position: sticky;
+      top: 0;
+      z-index: 5;
+      box-shadow: 0 14px 30px rgba(15, 23, 42, 0.18);
+    }
+    .topbar-inner {
+      width: 1180px;
+      display: flex;
+      align-items: center;
+      gap: 24px;
+    }
+    .brand {
+      font-size: 20px;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+    }
+    .nav-pill {
+      padding: 8px 14px;
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.08);
+      font-size: 12px;
+      color: #cbd5e1;
+    }
+    .cart-summary {
+      margin-left: auto;
+      font-size: 13px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    #cart-count {
+      width: 26px;
+      height: 26px;
+      border-radius: 50%;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      background: #f97316;
+      color: #fff;
+      font-weight: 700;
+    }
+    .page {
+      width: 1180px;
+      margin: 24px auto 36px;
+    }
+    .hero {
+      display: grid;
+      grid-template-columns: 1.7fr 1fr;
+      gap: 22px;
+      margin-bottom: 22px;
+    }
+    .hero-card,
+    .trend-card,
+    .product-card,
+    .filters {
+      background: rgba(255, 255, 255, 0.9);
+      border: 1px solid rgba(148, 163, 184, 0.22);
+      border-radius: 24px;
+      box-shadow: 0 18px 40px rgba(15, 23, 42, 0.08);
+    }
+    .hero-card {
+      padding: 28px;
+      min-height: 198px;
+      background:
+        linear-gradient(135deg, rgba(13, 148, 136, 0.15), rgba(37, 99, 235, 0.08)),
+        rgba(255, 255, 255, 0.95);
+    }
+    .hero-kicker,
+    .meta-label {
+      font-size: 12px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: #0f766e;
+      font-weight: 700;
+    }
+    .hero-card h1 {
+      margin-top: 14px;
+      font-size: 34px;
+      line-height: 1.05;
+      max-width: 560px;
+    }
+    .hero-card p {
+      margin-top: 14px;
+      max-width: 560px;
+      font-size: 15px;
+      line-height: 1.55;
+      color: #475569;
+    }
+    .trend-card {
+      padding: 22px;
+      display: grid;
+      gap: 14px;
+      align-content: start;
+    }
+    .trend-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 12px 14px;
+      border-radius: 16px;
+      background: linear-gradient(90deg, rgba(249, 115, 22, 0.1), rgba(236, 72, 153, 0.08));
+      font-size: 13px;
+      font-weight: 600;
+      color: #334155;
+    }
+    .filters {
+      position: sticky;
+      top: 86px;
+      z-index: 4;
+      margin-bottom: 24px;
+      padding: 14px 18px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .filter-chip {
+      padding: 8px 12px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 700;
+      color: #334155;
+      background: #e2e8f0;
+    }
+    .filter-chip.active {
+      background: #0f172a;
+      color: #fff;
+    }
+    .catalog-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 20px;
+    }
+    .product-card {
+      padding: 16px;
+      min-height: 280px;
+      display: flex;
+      flex-direction: column;
+    }
+    .thumb {
+      height: 118px;
+      border-radius: 18px;
+      padding: 12px;
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      color: #fff;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+      margin-bottom: 14px;
+      position: relative;
+      overflow: hidden;
+    }
+    .thumb::after {
+      content: '';
+      position: absolute;
+      right: -18px;
+      bottom: -22px;
+      width: 98px;
+      height: 98px;
+      border-radius: 50%;
+      background: rgba(255, 255, 255, 0.22);
+    }
+    .theme-amber { background: linear-gradient(135deg, #f97316, #fb7185); }
+    .theme-cyan { background: linear-gradient(135deg, #06b6d4, #3b82f6); }
+    .theme-violet { background: linear-gradient(135deg, #8b5cf6, #ec4899); }
+    .theme-olive { background: linear-gradient(135deg, #65a30d, #14b8a6); }
+    .theme-night { background: linear-gradient(135deg, #0f172a, #334155); }
+    .theme-sand { background: linear-gradient(135deg, #eab308, #f97316); }
+    .thumb-badge {
+      position: relative;
+      z-index: 1;
+      padding: 6px 9px;
+      border-radius: 999px;
+      background: rgba(15, 23, 42, 0.26);
+    }
+    .product-card h3 {
+      font-size: 20px;
+      line-height: 1.15;
+      margin-top: 8px;
+      margin-bottom: 8px;
+    }
+    .product-card p {
+      font-size: 13px;
+      line-height: 1.5;
+      color: #64748b;
+      min-height: 40px;
+    }
+    .card-footer {
+      margin-top: auto;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 12px;
+    }
+    .price {
+      font-size: 20px;
+      font-weight: 700;
+    }
+    .status-pill {
+      padding: 6px 10px;
+      border-radius: 999px;
+      background: #e2e8f0;
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      color: #475569;
+    }
+    .product-card[data-added='true'] .status-pill {
+      background: #dcfce7;
+      color: #166534;
+    }
+    .add-btn {
+      width: 100%;
+      border: none;
+      border-radius: 14px;
+      height: 46px;
+      background: #111827;
+      color: #fff;
+      font-family: Arial, sans-serif;
+      font-size: 14px;
+      font-weight: 700;
+      cursor: pointer;
+      letter-spacing: 0.01em;
+    }
+    .add-btn:hover { background: #1f2937; }
+  </style>
+</head>
+<body data-last-added="none">
+  <header class="topbar">
+    <div class="topbar-inner">
+      <div class="brand">Northstar Goods</div>
+      <div class="nav-pill">Workspace Week</div>
+      <div class="nav-pill">Limited bundles</div>
+      <div class="nav-pill">Fast dispatch</div>
+      <div class="cart-summary">
+        <span>Cart</span>
+        <span id="cart-count">0</span>
+      </div>
+    </div>
+  </header>
+
+  <main class="page">
+    <section class="hero">
+      <article class="hero-card">
+        <div class="hero-kicker">Curated for small studios</div>
+        <h1>Dense layouts, warm light, and desk upgrades that still feel calm.</h1>
+        <p>
+          This fixture mirrors a real catalog page: lots of cards, repeated CTAs,
+          bold promo color, and just enough signal to make a row-scoped click fair.
+        </p>
+      </article>
+      <aside class="trend-card">
+        <div class="meta-label">Trending now</div>
+        <div class="trend-item"><span>Desk lamps</span><span>+24%</span></div>
+        <div class="trend-item"><span>Cable trays</span><span>+11%</span></div>
+        <div class="trend-item"><span>Conference audio</span><span>+8%</span></div>
+        <div class="trend-item"><span>Editor picks</span><span>Live</span></div>
+      </aside>
+    </section>
+
+    <section class="filters">
+      <span class="filter-chip active">All finds</span>
+      <span class="filter-chip">Desk lighting</span>
+      <span class="filter-chip">Sound</span>
+      <span class="filter-chip">Storage</span>
+      <span class="filter-chip">Bundles</span>
+      <span class="filter-chip">Ships today</span>
+    </section>
+
+    <section class="catalog-grid">
+      <article class="product-card" id="card-cloud-mug">
+        <div class="thumb theme-cyan"><span class="thumb-badge">Best seller</span></div>
+        <div class="meta-label">Desk ritual</div>
+        <h3>Cloud Mug</h3>
+        <p>Stoneware cup with a cork base for long review sessions.</p>
+        <div class="card-footer"><span class="price">$26</span><span class="status-pill" id="status-cloud-mug">Ready</span></div>
+        <button class="add-btn" id="add-cloud-mug" onclick="addToCart('cloud-mug')">Add to cart</button>
+      </article>
+
+      <article class="product-card" id="card-wicker-tray">
+        <div class="thumb theme-amber"><span class="thumb-badge">Fresh drop</span></div>
+        <div class="meta-label">Surface order</div>
+        <h3>Wicker Tray</h3>
+        <p>Shallow tray for pens, notebooks, chargers, and loose cables.</p>
+        <div class="card-footer"><span class="price">$32</span><span class="status-pill" id="status-wicker-tray">Ready</span></div>
+        <button class="add-btn" id="add-wicker-tray" onclick="addToCart('wicker-tray')">Add to cart</button>
+      </article>
+
+      <article class="product-card" id="card-pixel-speaker">
+        <div class="thumb theme-violet"><span class="thumb-badge">Weekend hit</span></div>
+        <div class="meta-label">Team audio</div>
+        <h3>Pixel Speaker</h3>
+        <p>Compact speaker with warm mids for focus playlists and demos.</p>
+        <div class="card-footer"><span class="price">$79</span><span class="status-pill" id="status-pixel-speaker">Ready</span></div>
+        <button class="add-btn" id="add-pixel-speaker" onclick="addToCart('pixel-speaker')">Add to cart</button>
+      </article>
+
+      <article class="product-card" id="card-frost-shelf">
+        <div class="thumb theme-night"><span class="thumb-badge">Limited run</span></div>
+        <div class="meta-label">Vertical space</div>
+        <h3>Frost Shelf</h3>
+        <p>Steel shelf with a cool matte finish for notebooks and hubs.</p>
+        <div class="card-footer"><span class="price">$64</span><span class="status-pill" id="status-frost-shelf">Ready</span></div>
+        <button class="add-btn" id="add-frost-shelf" onclick="addToCart('frost-shelf')">Add to cart</button>
+      </article>
+
+      <article class="product-card" id="card-solar-pencil-cup">
+        <div class="thumb theme-sand"><span class="thumb-badge">Studio pick</span></div>
+        <div class="meta-label">Small storage</div>
+        <h3>Solar Pencil Cup</h3>
+        <p>Bright ceramic holder that keeps markers and adapters in view.</p>
+        <div class="card-footer"><span class="price">$18</span><span class="status-pill" id="status-solar-pencil-cup">Ready</span></div>
+        <button class="add-btn" id="add-solar-pencil-cup" onclick="addToCart('solar-pencil-cup')">Add to cart</button>
+      </article>
+
+      <article class="product-card" id="card-nimbus-lamp">
+        <div class="thumb theme-olive"><span class="thumb-badge">Target pick</span></div>
+        <div class="meta-label">Desk lighting</div>
+        <h3>Nimbus Lamp</h3>
+        <p>Focused brass lamp with a dim edge ring and soft amber wash.</p>
+        <div class="card-footer"><span class="price">$94</span><span class="status-pill" id="status-nimbus-lamp">Ready</span></div>
+        <button class="add-btn" id="add-nimbus-lamp" onclick="addToCart('nimbus-lamp')">Add to cart</button>
+      </article>
+
+      <article class="product-card" id="card-mesh-inbox">
+        <div class="thumb theme-cyan"><span class="thumb-badge">New finish</span></div>
+        <div class="meta-label">Paper flow</div>
+        <h3>Mesh Inbox</h3>
+        <p>Two-tier tray for design proofs, invoices, and daily briefs.</p>
+        <div class="card-footer"><span class="price">$29</span><span class="status-pill" id="status-mesh-inbox">Ready</span></div>
+        <button class="add-btn" id="add-mesh-inbox" onclick="addToCart('mesh-inbox')">Add to cart</button>
+      </article>
+
+      <article class="product-card" id="card-marble-pad">
+        <div class="thumb theme-amber"><span class="thumb-badge">Office staple</span></div>
+        <div class="meta-label">Writing surface</div>
+        <h3>Marble Pad</h3>
+        <p>Weighted desk blotter with clean edges and a stone texture.</p>
+        <div class="card-footer"><span class="price">$44</span><span class="status-pill" id="status-marble-pad">Ready</span></div>
+        <button class="add-btn" id="add-marble-pad" onclick="addToCart('marble-pad')">Add to cart</button>
+      </article>
+
+      <article class="product-card" id="card-aurora-hook">
+        <div class="thumb theme-violet"><span class="thumb-badge">Giftable</span></div>
+        <div class="meta-label">Bag storage</div>
+        <h3>Aurora Hook</h3>
+        <p>Desk-edge hook for backpacks, headphones, and tote handles.</p>
+        <div class="card-footer"><span class="price">$21</span><span class="status-pill" id="status-aurora-hook">Ready</span></div>
+        <button class="add-btn" id="add-aurora-hook" onclick="addToCart('aurora-hook')">Add to cart</button>
+      </article>
+
+      <article class="product-card" id="card-echo-stand">
+        <div class="thumb theme-night"><span class="thumb-badge">Crew favorite</span></div>
+        <div class="meta-label">Video calls</div>
+        <h3>Echo Stand</h3>
+        <p>Adjustable stand that keeps cameras and phones eye-level.</p>
+        <div class="card-footer"><span class="price">$52</span><span class="status-pill" id="status-echo-stand">Ready</span></div>
+        <button class="add-btn" id="add-echo-stand" onclick="addToCart('echo-stand')">Add to cart</button>
+      </article>
+
+      <article class="product-card" id="card-paper-grid">
+        <div class="thumb theme-sand"><span class="thumb-badge">Planner set</span></div>
+        <div class="meta-label">Weekly planning</div>
+        <h3>Paper Grid</h3>
+        <p>Grid pad in muted tones with tear-off notes and task blocks.</p>
+        <div class="card-footer"><span class="price">$16</span><span class="status-pill" id="status-paper-grid">Ready</span></div>
+        <button class="add-btn" id="add-paper-grid" onclick="addToCart('paper-grid')">Add to cart</button>
+      </article>
+
+      <article class="product-card" id="card-harbor-clock">
+        <div class="thumb theme-olive"><span class="thumb-badge">Calm mode</span></div>
+        <div class="meta-label">Room timing</div>
+        <h3>Harbor Clock</h3>
+        <p>Minimal wall clock with a soft sweep hand and walnut trim.</p>
+        <div class="card-footer"><span class="price">$58</span><span class="status-pill" id="status-harbor-clock">Ready</span></div>
+        <button class="add-btn" id="add-harbor-clock" onclick="addToCart('harbor-clock')">Add to cart</button>
+      </article>
+    </section>
+  </main>
+
+  <script>
+    function addToCart(id) {
+      const body = document.body;
+      const countNode = document.getElementById('cart-count');
+      const card = document.getElementById('card-' + id);
+      const status = document.getElementById('status-' + id);
+      card.setAttribute('data-added', 'true');
+      status.textContent = 'In cart';
+      body.setAttribute('data-last-added', id);
+      countNode.textContent = String(Number(countNode.textContent) + 1);
+    }
+  </script>
+</body>
+</html>

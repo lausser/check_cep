@@ -1,0 +1,507 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=1280">
+  <title>PulseCart - Anchor Then Target</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: Arial, sans-serif;
+      color: #0f172a;
+      background:
+        radial-gradient(circle at 12% 0%, rgba(255,255,255,0.72), transparent 20%),
+        radial-gradient(circle at 92% 8%, rgba(255,255,255,0.5), transparent 16%),
+        linear-gradient(180deg, #fff4d7 0%, #ffe5ef 24%, #edf4ff 58%, #effef3 100%);
+    }
+    .ticker {
+      background: linear-gradient(90deg, #ef4444, #f59e0b, #22c55e, #0ea5e9, #8b5cf6);
+      color: #fff;
+      font-size: 12px;
+      font-weight: 800;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      padding: 10px 0;
+    }
+    .ticker-inner,
+    .masthead,
+    .page {
+      width: 1200px;
+      margin: 0 auto;
+    }
+    .ticker-inner {
+      display: flex;
+      justify-content: center;
+      gap: 20px;
+    }
+    .masthead {
+      display: grid;
+      grid-template-columns: 250px 1fr 220px;
+      gap: 18px;
+      align-items: center;
+      padding: 18px 0;
+    }
+    .glass,
+    .hero,
+    .sidebar-card,
+    .tile {
+      background: rgba(255,255,255,0.87);
+      border: 1px solid rgba(148,163,184,0.18);
+      box-shadow: 0 16px 34px rgba(15,23,42,0.08);
+      backdrop-filter: blur(8px);
+    }
+    .brand,
+    .search,
+    .basket {
+      min-height: 84px;
+      border-radius: 22px;
+      padding: 16px 18px;
+    }
+    .brand-name {
+      font-size: 30px;
+      font-weight: 800;
+      color: #dc2626;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    .brand-sub {
+      margin-top: 6px;
+      font-size: 12px;
+      color: #64748b;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+    .search input {
+      width: 100%;
+      border: none;
+      border-radius: 999px;
+      padding: 15px 18px;
+      font-size: 15px;
+      background: linear-gradient(90deg, #fef2f2, #eff6ff);
+      color: #334155;
+    }
+    .basket {
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      background: linear-gradient(135deg, rgba(224,231,255,0.9), rgba(240,249,255,0.85));
+    }
+    .basket strong {
+      display: inline-block;
+      padding: 8px 12px;
+      border-radius: 999px;
+      background: #0f172a;
+      color: #fff;
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      width: fit-content;
+    }
+    .basket p {
+      margin-top: 8px;
+      font-size: 13px;
+      color: #475569;
+      line-height: 1.45;
+    }
+    .page {
+      padding-bottom: 32px;
+    }
+    .hero-wrap {
+      display: grid;
+      grid-template-columns: 2fr 1fr;
+      gap: 18px;
+      margin-bottom: 18px;
+    }
+    .hero,
+    .sidebar-card,
+    .detail {
+      border-radius: 28px;
+    }
+    .hero {
+      min-height: 180px;
+      padding: 24px 28px;
+      background:
+        radial-gradient(circle at 16% 28%, rgba(255,255,255,0.88), transparent 18%),
+        linear-gradient(135deg, rgba(251,113,133,0.34), rgba(253,186,116,0.28), rgba(96,165,250,0.25), rgba(52,211,153,0.22)),
+        rgba(255,255,255,0.86);
+    }
+    .hero h1 {
+      font-size: 38px;
+      line-height: 1.02;
+      max-width: 640px;
+      margin-top: 8px;
+    }
+    .hero p {
+      margin-top: 14px;
+      font-size: 15px;
+      line-height: 1.55;
+      color: #475569;
+      max-width: 640px;
+    }
+    .promo-stack {
+      display: grid;
+      gap: 10px;
+      align-content: start;
+      padding: 18px;
+      background: linear-gradient(180deg, rgba(255,255,255,0.9), rgba(240,249,255,0.88));
+    }
+    .chip {
+      padding: 10px 14px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 800;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      color: #0f172a;
+    }
+    .chip:nth-child(1) { background: #fecaca; }
+    .chip:nth-child(2) { background: #fde68a; }
+    .chip:nth-child(3) { background: #bfdbfe; }
+    .chip:nth-child(4) { background: #bbf7d0; }
+    .chip:nth-child(5) { background: #ddd6fe; }
+    .chip:nth-child(6) { background: #fed7aa; }
+    .content {
+      display: grid;
+      grid-template-columns: 1fr 280px;
+      gap: 18px;
+      align-items: start;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 18px;
+    }
+    .tile {
+      border-radius: 26px;
+      overflow: hidden;
+      position: relative;
+      min-height: 350px;
+      cursor: pointer;
+    }
+    .tile[data-opened='true'] {
+      outline: 4px solid rgba(34,197,94,0.28);
+    }
+    .photo {
+      height: 194px;
+      border-bottom: 1px solid rgba(148,163,184,0.18);
+      background-size: cover;
+      background-position: center;
+      position: relative;
+    }
+    .photo::after {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(180deg, rgba(255,255,255,0) 45%, rgba(15,23,42,0.08) 100%);
+    }
+    .preview {
+      position: absolute;
+      left: 96px;
+      top: 44px;
+      width: 96px;
+      height: 96px;
+      border-radius: 26px;
+      z-index: 2;
+      border: 4px solid rgba(255,255,255,0.78);
+      box-shadow: 0 14px 28px rgba(15,23,42,0.18);
+      background-size: cover;
+      background-position: center;
+    }
+    .anchor-badge {
+      position: absolute;
+      left: 16px;
+      top: 16px;
+      z-index: 3;
+      padding: 8px 12px;
+      border-radius: 999px;
+      font-size: 11px;
+      font-weight: 900;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: #fff;
+      background: linear-gradient(90deg, #111827, #dc2626);
+      box-shadow: 0 10px 18px rgba(15,23,42,0.18);
+    }
+    .noise {
+      position: absolute;
+      right: 14px;
+      top: 14px;
+      z-index: 3;
+      padding: 8px 10px;
+      border-radius: 999px;
+      font-size: 11px;
+      font-weight: 800;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      color: #fff;
+    }
+    .noise.red { background: #ef4444; }
+    .noise.blue { background: #2563eb; }
+    .noise.orange { background: #ea580c; }
+    .noise.teal { background: #0891b2; }
+    .noise.pink { background: #ec4899; }
+    .body {
+      padding: 14px 16px 16px;
+    }
+    .cat {
+      display: inline-block;
+      margin-bottom: 10px;
+      padding: 6px 10px;
+      border-radius: 999px;
+      font-size: 11px;
+      font-weight: 800;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: #fff;
+    }
+    .fashion { background: #ec4899; }
+    .tech { background: #2563eb; }
+    .tools { background: #ea580c; }
+    .beauty { background: #8b5cf6; }
+    .home { background: #14b8a6; }
+    .accessory { background: #0f766e; }
+    .tile h2 {
+      font-size: 20px;
+      line-height: 1.12;
+      margin-bottom: 8px;
+    }
+    .tile p {
+      min-height: 56px;
+      font-size: 13px;
+      line-height: 1.48;
+      color: #64748b;
+    }
+    .meta {
+      margin-top: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+    .price {
+      font-size: 22px;
+      font-weight: 800;
+    }
+    .status {
+      padding: 6px 10px;
+      border-radius: 999px;
+      background: #e2e8f0;
+      color: #475569;
+      font-size: 11px;
+      font-weight: 800;
+      text-transform: uppercase;
+    }
+    .tile[data-opened='true'] .status {
+      background: #dcfce7;
+      color: #166534;
+    }
+    .sidebar {
+      display: grid;
+      gap: 18px;
+    }
+    .detail {
+      padding: 20px;
+      min-height: 220px;
+      background: linear-gradient(180deg, rgba(255,255,255,0.92), rgba(239,246,255,0.92));
+    }
+    .detail h3 {
+      font-size: 24px;
+      margin-bottom: 10px;
+      line-height: 1.1;
+    }
+    .detail p,
+    .sidebar-card li {
+      color: #475569;
+      font-size: 14px;
+      line-height: 1.55;
+    }
+    .sidebar-card {
+      padding: 18px;
+    }
+    .sidebar-card h4 {
+      font-size: 16px;
+      margin-bottom: 8px;
+    }
+    .sidebar-card ul {
+      padding-left: 18px;
+    }
+  </style>
+</head>
+<body data-opened-item="none">
+  <div class="ticker">
+    <div class="ticker-inner">
+      <span>night sale</span>
+      <span>beauty rush</span>
+      <span>gadget lane</span>
+      <span>tool parade</span>
+      <span>style pop</span>
+      <span>home burst</span>
+    </div>
+  </div>
+
+  <header class="masthead">
+    <section class="glass brand">
+      <div class="brand-name">PulseCart</div>
+      <div class="brand-sub">Anchor then target fixture</div>
+    </section>
+    <section class="glass search">
+      <input type="text" value="hair dryer, watch, bag, drill, dress, brush" readonly>
+    </section>
+    <section class="glass basket">
+      <strong>237 layered offers</strong>
+      <p>One unique badge anchors the search. The actual target preview is still ambiguous on its own.</p>
+    </section>
+  </header>
+
+  <main class="page">
+    <section class="hero-wrap">
+      <article class="glass hero">
+        <div style="font-size:12px;font-weight:800;letter-spacing:0.08em;text-transform:uppercase;color:#b91c1c;">Staged matching</div>
+        <h1>Find the right tile by a unique anchor first, then recover the ambiguous preview.</h1>
+        <p>This page deliberately places two nearly identical dryers inside a crowded marketplace. The unique anchor badge narrows the region so the second image match becomes safe.</p>
+      </article>
+      <aside class="glass promo-stack">
+        <div class="chip">anchor badge</div>
+        <div class="chip">preview twins</div>
+        <div class="chip">mixed categories</div>
+        <div class="chip">bright noise</div>
+        <div class="chip">card repetition</div>
+        <div class="chip">deterministic layout</div>
+      </aside>
+    </section>
+
+    <section class="content">
+      <div class="grid">
+        <article class="tile" id="tile-neon-sneaker" onclick="openItem('neon-sneaker')">
+          <div class="photo" style="background-image:url(&quot;data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 320 220'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop stop-color='%23fb7185'/%3E%3Cstop offset='1' stop-color='%23f59e0b'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='320' height='220' fill='url(%23g)'/%3E%3Cpath d='M63 136c35-8 72 1 121 20 20 8 39 13 60 13 15 0 30 17 20 29-8 11-35 16-60 12-28-3-58-10-78-16-18-5-52-9-78-7-10 1-16-6-15-16 2-18 10-29 30-35z' fill='%23ffffff'/%3E%3Ccircle cx='108' cy='172' r='12' fill='%23fb7185'/%3E%3Ccircle cx='214' cy='181' r='13' fill='%2338bdf8'/%3E%3C/svg%3E&quot;);"></div>
+          <span class="noise pink">flash drop</span>
+          <div class="body"><span class="cat fashion">Fashion</span><h2>Neon Sprint Sneaker</h2><p>Sunset runner with glossy foam and an oversized sole line.</p><div class="meta"><span class="price">$34</span><span class="status" id="status-neon-sneaker">Ready</span></div></div>
+        </article>
+
+        <article class="tile" id="tile-pocket-projector" onclick="openItem('pocket-projector')">
+          <div class="photo" style="background-image:url(&quot;data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 320 220'%3E%3Crect width='320' height='220' fill='%230f172a'/%3E%3Crect x='24' y='28' width='272' height='164' rx='24' fill='%231d4ed8'/%3E%3Ccircle cx='108' cy='111' r='44' fill='%23dbeafe'/%3E%3Crect x='168' y='74' width='72' height='72' rx='16' fill='%2393c5fd'/%3E%3Cpath d='M236 44l58-18v136l-58-24z' fill='%2338bdf8' fill-opacity='.7'/%3E%3C/svg%3E&quot;);"></div>
+          <span class="noise blue">tech rush</span>
+          <div class="body"><span class="cat tech">Electronics</span><h2>Pocket Beam Projector</h2><p>Bright cobalt projector tile with a heavy lens glow and side beam.</p><div class="meta"><span class="price">$56</span><span class="status" id="status-pocket-projector">Ready</span></div></div>
+        </article>
+
+        <article class="tile" id="tile-rapid-drill" onclick="openItem('rapid-drill')">
+          <div class="photo" style="background-image:url(&quot;data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 320 220'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop stop-color='%23f97316'/%3E%3Cstop offset='1' stop-color='%23fde68a'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='320' height='220' fill='url(%23g)'/%3E%3Cpath d='M82 78h96l22 18h48v32h-31l-13 20h-37l-13-24H96z' fill='%2329232e'/%3E%3Crect x='122' y='150' width='30' height='46' rx='10' fill='%230f172a'/%3E%3C/svg%3E&quot;);"></div>
+          <span class="noise orange">tool week</span>
+          <div class="body"><span class="cat tools">Tools</span><h2>RapidFix Mini Drill</h2><p>Warm workshop drill silhouette with bold dark grip and bright case light.</p><div class="meta"><span class="price">$29</span><span class="status" id="status-rapid-drill">Ready</span></div></div>
+        </article>
+
+        <article class="tile" id="tile-aurora-supersonic" data-similar-group="dryer" onclick="openItem('aurora-supersonic')">
+          <div class="photo" style="background-image:url(&quot;data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 320 220'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop stop-color='%23fb7185'/%3E%3Cstop offset='.5' stop-color='%23f472b6'/%3E%3Cstop offset='1' stop-color='%23c084fc'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='320' height='220' fill='url(%23g)'/%3E%3Ccircle cx='250' cy='44' r='28' fill='%23fff4'/%3E%3Cpath d='M95 96c0-17 14-31 31-31h54c29 0 56 16 70 40l16 27c6 11-2 24-14 24h-44v26c0 16-13 29-29 29h-11c-13 0-23-10-23-23v-17l-28-9c-13-4-22-16-22-30V96z' fill='%23fff7fb'/%3E%3Ccircle cx='162' cy='112' r='34' fill='%23f9a8d4'/%3E%3Ccircle cx='162' cy='112' r='18' fill='%23fff'/%3E%3Crect x='118' y='144' width='18' height='46' rx='9' fill='%23be185d'/%3E%3Cpath d='M211 82c18 10 29 20 39 37' stroke='%23fff' stroke-width='9' stroke-linecap='round' opacity='.8'/%3E%3Cpath d='M223 64c16 8 31 16 48 34' stroke='%23fde68a' stroke-width='8' stroke-linecap='round' opacity='.85'/%3E%3C/svg%3E&quot;);"></div>
+          <span class="anchor-badge" id="aurora-anchor-badge">Night Sale</span>
+          <div class="preview" style="background-image:url(&quot;data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 96 96'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop stop-color='%23fb7185'/%3E%3Cstop offset='.5' stop-color='%23f472b6'/%3E%3Cstop offset='1' stop-color='%23c084fc'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='96' height='96' rx='24' fill='url(%23g)'/%3E%3Cpath d='M22 41c0-8 7-15 15-15h22c12 0 22 6 28 16l6 9c2 4-1 9-6 9H65v12c0 7-6 12-13 12h-4c-6 0-10-4-10-10v-8l-10-3c-4-1-6-5-6-10V41z' fill='%23fff7fb'/%3E%3Ccircle cx='51' cy='47' r='14' fill='%23f9a8d4'/%3E%3Ccircle cx='51' cy='47' r='8' fill='%23fff'/%3E%3Crect x='36' y='60' width='8' height='20' rx='4' fill='%23be185d'/%3E%3Cpath d='M73 32c6 4 10 8 13 14' stroke='%23fff' stroke-width='4' stroke-linecap='round' opacity='.85'/%3E%3C/svg%3E&quot;);"></div>
+          <span class="noise pink">beauty lead</span>
+          <div class="body"><span class="cat beauty">Beauty &amp; Health</span><h2>Aurora Supersonic Dryer</h2><p>Target dryer with a unique black-red anchor badge and a near-duplicate preview crop.</p><div class="meta"><span class="price">$44</span><span class="status" id="status-aurora-supersonic">Ready</span></div></div>
+        </article>
+
+        <article class="tile" id="tile-aurora-travel-pro" data-similar-group="dryer" onclick="openItem('aurora-travel-pro')">
+          <div class="photo" style="background-image:url(&quot;data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 320 220'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop stop-color='%23f472b6'/%3E%3Cstop offset='.5' stop-color='%23fb7185'/%3E%3Cstop offset='1' stop-color='%23c084fc'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='320' height='220' fill='url(%23g)'/%3E%3Ccircle cx='70' cy='42' r='26' fill='%23fff4'/%3E%3Cpath d='M95 96c0-17 14-31 31-31h54c29 0 56 16 70 40l16 27c6 11-2 24-14 24h-44v26c0 16-13 29-29 29h-11c-13 0-23-10-23-23v-17l-28-9c-13-4-22-16-22-30V96z' fill='%23fff8fc'/%3E%3Ccircle cx='160' cy='112' r='34' fill='%23fbcfe8'/%3E%3Ccircle cx='160' cy='112' r='18' fill='%23fff'/%3E%3Crect x='118' y='144' width='18' height='46' rx='9' fill='%239d174d'/%3E%3Cpath d='M213 82c17 11 28 21 37 37' stroke='%23fff' stroke-width='9' stroke-linecap='round' opacity='.8'/%3E%3Cpath d='M220 62c15 8 29 16 44 31' stroke='%23fde68a' stroke-width='8' stroke-linecap='round' opacity='.84'/%3E%3C/svg%3E&quot;);"></div>
+          <div class="preview" style="background-image:url(&quot;data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 96 96'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop stop-color='%23f472b6'/%3E%3Cstop offset='.5' stop-color='%23fb7185'/%3E%3Cstop offset='1' stop-color='%23c084fc'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='96' height='96' rx='24' fill='url(%23g)'/%3E%3Cpath d='M22 41c0-8 7-15 15-15h22c12 0 22 6 28 16l6 9c2 4-1 9-6 9H65v12c0 7-6 12-13 12h-4c-6 0-10-4-10-10v-8l-10-3c-4-1-6-5-6-10V41z' fill='%23fff8fc'/%3E%3Ccircle cx='51' cy='47' r='14' fill='%23fbcfe8'/%3E%3Ccircle cx='51' cy='47' r='8' fill='%23fff'/%3E%3Crect x='36' y='60' width='8' height='20' rx='4' fill='%239d174d'/%3E%3Cpath d='M73 32c6 4 10 8 13 14' stroke='%23fff' stroke-width='4' stroke-linecap='round' opacity='.85'/%3E%3C/svg%3E&quot;);"></div>
+          <span class="noise pink">beauty twin</span>
+          <div class="body"><span class="cat beauty">Beauty &amp; Health</span><h2>Aurora Travel Pro</h2><p>Second dryer with nearly identical preview art but without the unique anchor badge.</p><div class="meta"><span class="price">$37</span><span class="status" id="status-aurora-travel-pro">Ready</span></div></div>
+        </article>
+
+        <article class="tile" id="tile-citrus-bag" onclick="openItem('citrus-bag')">
+          <div class="photo" style="background-image:url(&quot;data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 320 220'%3E%3Crect width='320' height='220' fill='%23fbbf24'/%3E%3Crect x='78' y='72' width='150' height='110' rx='24' fill='%23fff7ed'/%3E%3Cpath d='M111 86c0-20 15-36 33-36h18c18 0 33 16 33 36' stroke='%23fb923c' stroke-width='12' fill='none' stroke-linecap='round'/%3E%3Ccircle cx='204' cy='118' r='22' fill='%23fdba74'/%3E%3C/svg%3E&quot;);"></div>
+          <span class="noise orange">bag buzz</span>
+          <div class="body"><span class="cat accessory">Accessories</span><h2>Citrus Mini Crossbody</h2><p>Sunlit orange bag tile with a rounded clasp and high-contrast highlights.</p><div class="meta"><span class="price">$19</span><span class="status" id="status-citrus-bag">Ready</span></div></div>
+        </article>
+
+        <article class="tile" id="tile-orbit-watch" onclick="openItem('orbit-watch')">
+          <div class="photo" style="background-image:url(&quot;data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 320 220'%3E%3Crect width='320' height='220' fill='%2393c5fd'/%3E%3Crect x='135' y='18' width='50' height='54' rx='18' fill='%231e3a8a'/%3E%3Crect x='96' y='56' width='128' height='110' rx='34' fill='%230f172a'/%3E%3Ccircle cx='160' cy='111' r='34' fill='%23dbeafe'/%3E%3C/svg%3E&quot;);"></div>
+          <span class="noise blue">tech lane</span>
+          <div class="body"><span class="cat tech">Electronics</span><h2>Orbit Smartwatch</h2><p>Blue lifestyle watch tile with oversized dial glow and navy strap blocks.</p><div class="meta"><span class="price">$37</span><span class="status" id="status-orbit-watch">Ready</span></div></div>
+        </article>
+
+        <article class="tile" id="tile-flora-dress" onclick="openItem('flora-dress')">
+          <div class="photo" style="background-image:url(&quot;data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 320 220'%3E%3Crect width='320' height='220' fill='%23fbcfe8'/%3E%3Ccircle cx='160' cy='54' r='24' fill='%23fff1f2'/%3E%3Cpath d='M132 84l28 20 28-20 30 86H102z' fill='%23ec4899'/%3E%3C/svg%3E&quot;);"></div>
+          <span class="noise pink">style pick</span>
+          <div class="body"><span class="cat fashion">Fashion</span><h2>Flora Midi Dress</h2><p>Pink dress tile with mannequin silhouette and warm golden spark accents.</p><div class="meta"><span class="price">$28</span><span class="status" id="status-flora-dress">Ready</span></div></div>
+        </article>
+
+        <article class="tile" id="tile-satin-brush" onclick="openItem('satin-brush')">
+          <div class="photo" style="background-image:url(&quot;data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 320 220'%3E%3Crect width='320' height='220' fill='%23ddd6fe'/%3E%3Crect x='102' y='56' width='120' height='64' rx='24' fill='%23ffffff'/%3E%3Crect x='144' y='112' width='36' height='74' rx='18' fill='%237c3aed'/%3E%3C/svg%3E&quot;);"></div>
+          <span class="noise pink">beauty edit</span>
+          <div class="body"><span class="cat beauty">Beauty &amp; Health</span><h2>Satin Glow Brush</h2><p>Pearl body brush tile with a glossy purple handle and berry hue accents.</p><div class="meta"><span class="price">$14</span><span class="status" id="status-satin-brush">Ready</span></div></div>
+        </article>
+
+        <article class="tile" id="tile-laser-level" onclick="openItem('laser-level')">
+          <div class="photo" style="background-image:url(&quot;data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 320 220'%3E%3Crect width='320' height='220' fill='%23fdba74'/%3E%3Crect x='78' y='86' width='164' height='56' rx='18' fill='%231f2937'/%3E%3Cpath d='M40 58h240' stroke='%23ef4444' stroke-width='6' stroke-linecap='round' opacity='.85'/%3E%3C/svg%3E&quot;);"></div>
+          <span class="noise orange">tool lane</span>
+          <div class="body"><span class="cat tools">Tools</span><h2>Laser Line Level</h2><p>Orange studio product tile with a sharp red beam slicing across the frame.</p><div class="meta"><span class="price">$23</span><span class="status" id="status-laser-level">Ready</span></div></div>
+        </article>
+
+        <article class="tile" id="tile-crystal-lamp" onclick="openItem('crystal-lamp')">
+          <div class="photo" style="background-image:url(&quot;data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 320 220'%3E%3Crect width='320' height='220' fill='%23bae6fd'/%3E%3Cpath d='M160 34l42 60-42 74-42-74z' fill='%23ffffff'/%3E%3Crect x='147' y='154' width='26' height='40' rx='8' fill='%230f172a'/%3E%3C/svg%3E&quot;);"></div>
+          <span class="noise teal">home glow</span>
+          <div class="body"><span class="cat home">Home</span><h2>Crystal Prism Lamp</h2><p>Glassy geometric lamp tile with icy blues and a mirrored center flare.</p><div class="meta"><span class="price">$31</span><span class="status" id="status-crystal-lamp">Ready</span></div></div>
+        </article>
+
+        <article class="tile" id="tile-aqua-bottle" onclick="openItem('aqua-bottle')">
+          <div class="photo" style="background-image:url(&quot;data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 320 220'%3E%3Crect width='320' height='220' fill='%2399f6e4'/%3E%3Crect x='136' y='44' width='48' height='132' rx='20' fill='%23ecfeff'/%3E%3Crect x='144' y='30' width='32' height='22' rx='8' fill='%230f766e'/%3E%3C/svg%3E&quot;);"></div>
+          <span class="noise teal">fresh pick</span>
+          <div class="body"><span class="cat accessory">Accessories</span><h2>Aqua Sip Bottle</h2><p>Mint hydration tile with frosted bottle body and dark teal cap.</p><div class="meta"><span class="price">$12</span><span class="status" id="status-aqua-bottle">Ready</span></div></div>
+        </article>
+
+        <article class="tile" id="tile-winter-jacket" onclick="openItem('winter-jacket')">
+          <div class="photo" style="background-image:url(&quot;data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 320 220'%3E%3Crect width='320' height='220' fill='%23bfdbfe'/%3E%3Cpath d='M110 78l28-22h44l28 22 18 78H92z' fill='%230ea5e9'/%3E%3Crect x='150' y='66' width='20' height='108' fill='%23fff' fill-opacity='.55'/%3E%3C/svg%3E&quot;);"></div>
+          <span class="noise blue">cold rush</span>
+          <div class="body"><span class="cat fashion">Fashion</span><h2>Winter Pulse Jacket</h2><p>Sky-blue puffer tile with bright central zipper and heavy contrast seams.</p><div class="meta"><span class="price">$39</span><span class="status" id="status-winter-jacket">Ready</span></div></div>
+        </article>
+      </div>
+
+      <aside class="sidebar">
+        <article class="glass detail" id="detail-panel">
+          <h3>Pick a tile</h3>
+          <p>The target opens only after the staged anchor-then-target match resolves the near-duplicate preview pair.</p>
+        </article>
+        <article class="glass sidebar-card">
+          <h4>Why this fixture is harder</h4>
+          <ul>
+            <li>The preview crop is not unique globally.</li>
+            <li>The anchor badge is unique but not the final click target.</li>
+            <li>The second step depends on the region recovered from the first.</li>
+            <li>Mixed categories and repeated card layout stay noisy around the pair.</li>
+          </ul>
+        </article>
+      </aside>
+    </section>
+  </main>
+
+  <script>
+    const details = {
+      'aurora-supersonic': {
+        title: 'Aurora Supersonic Dryer',
+        text: 'Opened after staged matching: unique badge first, ambiguous preview second.'
+      },
+      'aurora-travel-pro': { title: 'Aurora Travel Pro', text: 'Similar dryer tile opened.' },
+      'neon-sneaker': { title: 'Neon Sprint Sneaker', text: 'Fashion tile opened.' },
+      'pocket-projector': { title: 'Pocket Beam Projector', text: 'Electronics tile opened.' },
+      'rapid-drill': { title: 'RapidFix Mini Drill', text: 'Tool tile opened.' },
+      'citrus-bag': { title: 'Citrus Mini Crossbody', text: 'Accessory tile opened.' },
+      'orbit-watch': { title: 'Orbit Smartwatch', text: 'Electronics tile opened.' },
+      'flora-dress': { title: 'Flora Midi Dress', text: 'Fashion tile opened.' },
+      'satin-brush': { title: 'Satin Glow Brush', text: 'Beauty tile opened.' },
+      'laser-level': { title: 'Laser Line Level', text: 'Tool tile opened.' },
+      'crystal-lamp': { title: 'Crystal Prism Lamp', text: 'Home tile opened.' },
+      'aqua-bottle': { title: 'Aqua Sip Bottle', text: 'Accessory tile opened.' },
+      'winter-jacket': { title: 'Winter Pulse Jacket', text: 'Fashion tile opened.' }
+    };
+
+    function openItem(id) {
+      document.body.setAttribute('data-opened-item', id);
+      document.querySelectorAll('.tile').forEach((tile) => tile.removeAttribute('data-opened'));
+      const tile = document.getElementById('tile-' + id);
+      const status = document.getElementById('status-' + id);
+      tile.setAttribute('data-opened', 'true');
+      status.textContent = 'Opened';
+      const panel = document.getElementById('detail-panel');
+      panel.innerHTML = '<h3>' + details[id].title + '</h3><p>' + details[id].text + '</p>';
+    }
+  </script>
+</body>
+</html>

@@ -373,6 +373,259 @@ box.  Without an offset, the click lands at the center.
 
 ---
 
+## Advanced Tips for Tricky Realistic Fixtures
+
+The strongest recent fixtures in this repository are not "clean demo pages"
+but intentionally crowded, repetitive, realistic-looking layouts.  This is
+where `check-cep-vision` becomes genuinely useful: not because it can solve
+arbitrary chaos, but because it can handle **hard-but-fair** visual problems
+when the fixture author designs the page and the test together.
+
+### The Right Goal
+
+When you write a tricky local fixture, do **not** aim for magical success on a
+messy page.  Aim for this pattern instead:
+
+1. A broad search is **supposed** to be ambiguous or unsafe.
+2. The test proves that ambiguity explicitly.
+3. The test applies a guided strategy such as narrowing the region or using an
+   anchor image first.
+4. The correct target is found.
+5. The page state proves that the right element changed and the wrong similar
+   element did not.
+
+This is much more valuable than a toy page where every visual target is unique.
+
+### Good Realistic Stressors
+
+Use these on local deterministic fixtures:
+
+- repeated cards with near-identical controls,
+- multiple visually similar product or article previews,
+- colorful promo chips and layout noise,
+- mixed categories that make the page feel real,
+- sticky sidebars or dense content blocks,
+- small crops that are intentionally too weak for full-page search.
+
+Avoid these in the green-path regression lane:
+
+- uncontrolled live websites,
+- randomized ads,
+- arbitrary animation drift,
+- severe occlusion,
+- personalization,
+- scenarios that would require OCR or redesign tolerance.
+
+### Pattern 1: Assert Ambiguity First
+
+On crowded pages, a broad search should often be tested like this:
+
+```typescript
+const result = await vision.locateByImage(page, asset('preview.png'), {
+  fullPage: true,
+  confidence: 0.55,
+});
+
+expect(result.found).toBe(false);
+expect(result.reason).toContain('ambig');
+```
+
+This is not a failure of the fixture.  It is the point of the fixture.
+
+### Pattern 2: Tighten the Region Repeatedly
+
+The most reliable success path on realistic pages is usually:
+
+- broad search to learn that the template is ambiguous,
+- narrow to the target card,
+- if still too broad, narrow again to the exact preview or sub-panel,
+- then click inside that small region.
+
+Example:
+
+```typescript
+const previewBox = await page.locator(TARGET_TILE_ID + ' .preview').boundingBox();
+
+const targetRegion = {
+  x: Math.floor(previewBox!.x - 8),
+  y: Math.floor(previewBox!.y - 8),
+  width: Math.ceil(previewBox!.width + 16),
+  height: Math.ceil(previewBox!.height + 16),
+};
+
+await vision.clickByImage(page, asset('dryer-ambiguous-crop.png'), {
+  region: targetRegion,
+  confidence: 0.56,
+  ambiguityGap: 0.05,
+  clickOffset: { x: 30, y: 30 },
+});
+```
+
+Important lesson: sometimes the target **card** is still too broad.  The right
+region is the exact **preview box** plus a small padding margin.
+
+### Pattern 3: Use a Unique Anchor First, Then the Real Target
+
+Sometimes the final target image is too weak to use globally, but a nearby
+badge or label is unique.  In that case:
+
+1. find the unique anchor globally,
+2. derive a follow-up region from the anchor's `bestCandidate`,
+3. search for the real target image only inside that region.
+
+Example:
+
+```typescript
+const anchor = await vision.locateByImage(page, asset('night-sale-badge.png'), {
+  fullPage: true,
+  confidence: 0.9,
+});
+
+const candidate = anchor.bestCandidate!;
+await page.evaluate((scrollY) => window.scrollTo(0, Math.max(0, scrollY)), candidate.y - 40);
+await page.waitForTimeout(100);
+
+const viewportAnchorY = await page.evaluate((pageY) => pageY - window.scrollY, candidate.y);
+const stagedRegion = {
+  x: Math.max(0, Math.floor(candidate.x - 20)),
+  y: Math.max(0, Math.floor(viewportAnchorY - 10)),
+  width: Math.ceil(candidate.width + 220),
+  height: Math.ceil(candidate.height + 210),
+};
+
+await vision.clickByImage(page, asset('aurora-preview.png'), {
+  region: stagedRegion,
+  confidence: 0.83,
+  clickOffset: { x: 48, y: 48 },
+});
+```
+
+This staged pattern is ideal for realistic marketplaces, article cards, and
+other repeated layouts where a single weak crop cannot safely identify the
+correct item on its own.
+
+### Similar Photos: What Actually Works
+
+When two real photos are visually similar, the wrong instinct is to keep making
+the template bigger until one item becomes unique.  That defeats the point of
+the scenario.
+
+What works better:
+
+- crop a **smaller but still meaningful** region from the target photo,
+- use that crop to prove full-page ambiguity,
+- then scope the match to the intended card or preview region.
+
+In other words: if the website really contains two similar products, let the
+template stay weak enough to reflect that reality, and solve the problem with
+guidance rather than with a deceptively over-specific crop.
+
+### Tune With Evidence, Not Guessing
+
+When a match behaves badly, inspect the raw result before changing the test:
+
+- `result.reason`
+- `result.bestCandidate?.combinedScore`
+- `result.secondCandidate?.combinedScore`
+
+Interpretation guide:
+
+- `found` when you expected `ambiguous` -> template is too exact or too large
+- `not-found` in a narrow region -> template is weak, confidence is too high,
+  or the region is too tight
+- `ambiguous` in a supposedly narrow region -> the region is still too broad
+
+Do not tune blindly.  Use direct `locateByImage()` probes until the behavior is
+understood.
+
+### `fullPage` and `region` Cannot Be Combined
+
+This is an easy mistake to make when refactoring a broad search into a guided
+search.
+
+Do **not** pass both:
+
+- `fullPage: true`
+- `region: {...}`
+
+Use `fullPage: true` only for broad discovery.  Use `region` only for guided
+matching.
+
+### Be Careful with Coordinates After Scrolling
+
+If a full-page match returns a `bestCandidate`, those coordinates are page
+coordinates.  If you scroll and then derive a new region for a follow-up
+operation, convert carefully.  A region that was correct before scrolling may be
+wrong afterward if you treat page coordinates as viewport coordinates.
+
+If the result becomes mysteriously `not-found` after scroll, inspect the region
+math first.
+
+### Use Debug Artifacts on Hard Matches
+
+For realistic fixtures, add debug artifacts to the tricky calls:
+
+```typescript
+await vision.clickByImage(page, asset('preview.png'), {
+  region: targetRegion,
+  debugDir: '/home/pwuser/results/debug',
+  debugLabel: 'preview-match',
+});
+```
+
+This is especially useful when:
+
+- you are tuning thresholds,
+- you are checking whether the region clipped too much,
+- you are debugging ambiguous matches,
+- you are comparing two very similar photo-based targets.
+
+### Assert Behavior, Not Only Match Success
+
+Never stop at "the image matched."  On realistic pages, the wrong nearby item
+may also be clickable.
+
+Always assert the actual outcome, for example:
+
+- `body` attribute changed to the intended item id,
+- target tile gained `data-opened="true"`,
+- target status text changed,
+- distractor tile did **not** change,
+- detail panel shows the correct title.
+
+This is what turns a visual match into a trustworthy end-to-end test.
+
+### Recommended Structure for a Hard Fixture
+
+For realistic vision fixtures, this three-test pattern works well:
+
+1. **Page-shape sanity test**
+   - counts tiles, cards, promo chips, or repeated groups
+2. **Broad ambiguity test**
+   - proves the small crop is unsafe globally
+3. **Guided success test**
+   - narrows the search and proves the correct element changed state
+
+That structure makes debugging much easier than a single giant test.
+
+### Capture Templates Inside the Container
+
+This matters even more for tricky pages than for simple ones.  Small rendering
+differences are enough to turn a weak crop from "ambiguous" into "not-found" or
+from "usable" into "too exact".  Always capture templates in the container with
+the same viewport and DPR as the fixture tests.
+
+### Worked Examples for These Patterns
+
+- `tests/fixtures/tc_marketplace_preview_tile/` - broad ambiguity on a small
+  preview crop, then region-guided success on a noisy synthetic marketplace
+- `tests/fixtures/tc_marketplace_anchor_then_target/` - unique anchor first,
+  then target-image matching inside an anchor-derived region
+- `tests/fixtures/tc_marketplace_real_photo_pair/` - two similar real photos,
+  a deliberately ambiguous crop, and preview-scoped recovery
+
+---
+
 ## Selector Strategy Guide
 
 ### When to Use DOM Selectors (Default Choice)

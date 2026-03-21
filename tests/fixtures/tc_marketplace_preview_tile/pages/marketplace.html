@@ -1,0 +1,605 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=1280">
+  <title>FlashFind - Colorstorm Marketplace</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: Arial, sans-serif;
+      color: #0f172a;
+      background:
+        radial-gradient(circle at 10% 0%, rgba(255, 255, 255, 0.68), transparent 18%),
+        radial-gradient(circle at 92% 8%, rgba(255, 255, 255, 0.48), transparent 14%),
+        linear-gradient(180deg, #fff2dc 0%, #ffe6ef 18%, #eef4ff 42%, #f3fff1 66%, #f8f2ff 100%);
+    }
+    .top-strip {
+      background: linear-gradient(90deg, #ff4d6d, #ff8a00, #ffd43b, #2dd4bf, #3b82f6, #8b5cf6);
+      color: #fff;
+      padding: 10px 0;
+      font-size: 12px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+    .top-strip-inner,
+    .masthead,
+    .page {
+      width: 1200px;
+      margin: 0 auto;
+    }
+    .top-strip-inner {
+      display: flex;
+      gap: 18px;
+      justify-content: center;
+    }
+    .masthead {
+      display: grid;
+      grid-template-columns: 270px 1fr 200px;
+      gap: 18px;
+      align-items: center;
+      padding: 18px 0 14px;
+    }
+    .brand-card,
+    .search-card,
+    .cart-card,
+    .hero-banner,
+    .promo-cloud,
+    .detail-panel,
+    .market-tile {
+      background: rgba(255, 255, 255, 0.86);
+      border: 1px solid rgba(148, 163, 184, 0.18);
+      box-shadow: 0 16px 34px rgba(15, 23, 42, 0.08);
+      backdrop-filter: blur(8px);
+    }
+    .brand-card,
+    .cart-card,
+    .search-card {
+      border-radius: 22px;
+      padding: 16px 18px;
+      min-height: 82px;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+    }
+    .brand-card {
+      background: linear-gradient(135deg, rgba(255,255,255,0.92), rgba(255,233,244,0.78));
+    }
+    .brand-name {
+      font-size: 30px;
+      font-weight: 800;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      color: #ec4899;
+    }
+    .brand-sub {
+      margin-top: 6px;
+      font-size: 12px;
+      color: #64748b;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+    .search-card input {
+      width: 100%;
+      border: none;
+      border-radius: 999px;
+      padding: 15px 18px;
+      font-size: 15px;
+      background: linear-gradient(90deg, #fdf2f8, #f0f9ff);
+      color: #334155;
+    }
+    .cart-card {
+      align-items: flex-start;
+      background: linear-gradient(135deg, rgba(237, 233, 254, 0.88), rgba(224, 242, 254, 0.82));
+    }
+    .cart-pill {
+      padding: 8px 12px;
+      border-radius: 999px;
+      background: #0f172a;
+      color: #fff;
+      font-size: 12px;
+      font-weight: 700;
+      text-transform: uppercase;
+    }
+    .page {
+      padding-bottom: 32px;
+    }
+    .hero {
+      display: grid;
+      grid-template-columns: 2fr 1fr;
+      gap: 18px;
+      margin-bottom: 18px;
+    }
+    .hero-banner,
+    .promo-cloud,
+    .detail-panel {
+      border-radius: 28px;
+    }
+    .hero-banner {
+      min-height: 186px;
+      padding: 26px 28px;
+      background:
+        radial-gradient(circle at 16% 24%, rgba(255,255,255,0.88), transparent 18%),
+        linear-gradient(135deg, rgba(255, 121, 198, 0.34), rgba(255, 184, 0, 0.24), rgba(34, 211, 238, 0.24), rgba(139, 92, 246, 0.26)),
+        rgba(255,255,255,0.85);
+    }
+    .hero-banner h1 {
+      font-size: 38px;
+      line-height: 1;
+      max-width: 600px;
+      margin-top: 10px;
+    }
+    .hero-banner p {
+      margin-top: 14px;
+      max-width: 610px;
+      line-height: 1.55;
+      color: #475569;
+      font-size: 15px;
+    }
+    .promo-cloud {
+      padding: 20px;
+      display: grid;
+      gap: 10px;
+      align-content: start;
+      background: linear-gradient(180deg, rgba(255,255,255,0.88), rgba(238,242,255,0.86));
+    }
+    .promo-chip {
+      padding: 10px 14px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 800;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      color: #1e293b;
+    }
+    .c1 { background: #f9a8d4; }
+    .c2 { background: #fde68a; }
+    .c3 { background: #93c5fd; }
+    .c4 { background: #86efac; }
+    .c5 { background: #fca5a5; }
+    .c6 { background: #c4b5fd; }
+    .c7 { background: #67e8f9; }
+    .c8 { background: #fdba74; }
+    .content {
+      display: grid;
+      grid-template-columns: 1fr 280px;
+      gap: 18px;
+      align-items: start;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 18px;
+    }
+    .market-tile {
+      border-radius: 26px;
+      overflow: hidden;
+      min-height: 354px;
+      position: relative;
+      cursor: pointer;
+    }
+    .market-tile[data-opened='true'] {
+      outline: 4px solid rgba(34, 197, 94, 0.28);
+    }
+    .photo-frame {
+      height: 190px;
+      background-size: cover;
+      background-position: center;
+      border-bottom: 1px solid rgba(148, 163, 184, 0.18);
+      position: relative;
+    }
+    .photo-frame::after {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(180deg, rgba(255,255,255,0) 45%, rgba(15,23,42,0.08) 100%);
+    }
+    .preview-crop {
+      position: absolute;
+      left: 103px;
+      top: 42px;
+      width: 92px;
+      height: 92px;
+      border-radius: 26px;
+      z-index: 2;
+      box-shadow: 0 14px 24px rgba(15, 23, 42, 0.18);
+      border: 4px solid rgba(255, 255, 255, 0.72);
+      background-size: cover;
+      background-position: center;
+    }
+    .noise-sticker {
+      position: absolute;
+      z-index: 2;
+      right: 14px;
+      top: 14px;
+      padding: 8px 10px;
+      border-radius: 999px;
+      font-size: 11px;
+      font-weight: 800;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      color: #fff;
+      box-shadow: 0 10px 16px rgba(15, 23, 42, 0.14);
+    }
+    .sticker-pink { background: #ec4899; }
+    .sticker-blue { background: #2563eb; }
+    .sticker-orange { background: #ea580c; }
+    .sticker-green { background: #0891b2; }
+    .tile-body {
+      padding: 14px 16px 16px;
+    }
+    .category-badge {
+      display: inline-block;
+      padding: 6px 10px;
+      border-radius: 999px;
+      font-size: 11px;
+      font-weight: 800;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+      color: #fff;
+      margin-bottom: 10px;
+    }
+    .cat-fashion { background: #ec4899; }
+    .cat-tech { background: #2563eb; }
+    .cat-tools { background: #ea580c; }
+    .cat-beauty { background: #8b5cf6; }
+    .cat-home { background: #14b8a6; }
+    .cat-accessory { background: #0f766e; }
+    .market-tile h2 {
+      font-size: 20px;
+      line-height: 1.12;
+      margin-bottom: 8px;
+    }
+    .market-tile p {
+      font-size: 13px;
+      line-height: 1.48;
+      color: #64748b;
+      min-height: 56px;
+    }
+    .meta-row {
+      margin-top: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+    .price {
+      font-size: 22px;
+      font-weight: 800;
+      color: #0f172a;
+    }
+    .status-pill {
+      padding: 6px 10px;
+      border-radius: 999px;
+      background: #e2e8f0;
+      color: #475569;
+      font-size: 11px;
+      font-weight: 800;
+      text-transform: uppercase;
+    }
+    .market-tile[data-opened='true'] .status-pill {
+      background: #dcfce7;
+      color: #166534;
+    }
+    .sidebar-stack {
+      display: grid;
+      gap: 18px;
+    }
+    .detail-panel {
+      padding: 20px;
+      min-height: 220px;
+      background: linear-gradient(180deg, rgba(255,255,255,0.9), rgba(240,249,255,0.92));
+    }
+    .detail-panel h3 {
+      font-size: 24px;
+      line-height: 1.1;
+      margin-bottom: 10px;
+    }
+    .detail-panel p {
+      color: #475569;
+      line-height: 1.55;
+      font-size: 14px;
+    }
+    .mini-card {
+      border-radius: 22px;
+      padding: 16px;
+      background: rgba(255,255,255,0.86);
+      border: 1px solid rgba(148, 163, 184, 0.16);
+      box-shadow: 0 14px 28px rgba(15, 23, 42, 0.07);
+    }
+    .mini-card h4 {
+      font-size: 16px;
+      margin-bottom: 8px;
+    }
+    .mini-card ul {
+      padding-left: 18px;
+      color: #475569;
+      font-size: 13px;
+      line-height: 1.5;
+    }
+  </style>
+</head>
+<body data-opened-item="none">
+  <div class="top-strip">
+    <div class="top-strip-inner">
+      <span>flash deals</span>
+      <span>beauty drops</span>
+      <span>gadget rush</span>
+      <span>tool week</span>
+      <span>fashion picks</span>
+      <span>home steals</span>
+    </div>
+  </div>
+
+  <header class="masthead">
+    <div class="brand-card">
+      <div class="brand-name">FlashFind</div>
+      <div class="brand-sub">Marketplace colorstorm</div>
+    </div>
+    <div class="search-card">
+      <input type="text" value="hair dryer, midi dress, mini drill, smartwatch" readonly>
+    </div>
+    <div class="cart-card">
+      <div class="cart-pill">184 lightning offers</div>
+      <div style="margin-top:8px;font-size:13px;color:#475569;">Clothes, electronics, tools, accessories, beauty &amp; health - all mixed together.</div>
+    </div>
+  </header>
+
+  <main class="page">
+    <section class="hero">
+      <article class="hero-banner">
+        <div style="font-size:12px;font-weight:800;letter-spacing:0.08em;text-transform:uppercase;color:#be123c;">Trending carnival</div>
+        <h1>Chaos by design: dozens of vivid product photos compete for your attention.</h1>
+        <p>This fixture imitates the feeling of a flashy marketplace homepage while staying deterministic enough for image-based regression tests.</p>
+      </article>
+      <aside class="promo-cloud">
+        <div class="promo-chip c1">beauty blitz</div>
+        <div class="promo-chip c2">sports pop</div>
+        <div class="promo-chip c3">blue-tag electronics</div>
+        <div class="promo-chip c4">garden frenzy</div>
+        <div class="promo-chip c5">limited accessory drop</div>
+        <div class="promo-chip c6">fashion surge</div>
+        <div class="promo-chip c7">smart-home picks</div>
+        <div class="promo-chip c8">kitchen rush</div>
+      </aside>
+    </section>
+
+    <section class="content">
+      <div class="grid">
+        <article class="market-tile" id="tile-neon-sneaker" onclick="openItem('neon-sneaker')">
+          <div class="photo-frame" style="background-image:url(&quot;data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 320 220'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop stop-color='%23ff7aa2'/%3E%3Cstop offset='1' stop-color='%23ffb703'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='320' height='220' fill='url(%23g)'/%3E%3Ccircle cx='72' cy='64' r='34' fill='%23fff3'/%3E%3Cpath d='M62 134c36-7 72 1 122 20 18 7 37 13 58 13 16 0 31 17 21 29-9 11-36 15-61 12-27-3-57-10-77-16-18-5-52-9-78-7-10 1-16-6-15-16 2-19 11-30 30-35z' fill='%23ffffff'/%3E%3Cpath d='M157 124l36 13-8 12-34-11z' fill='%230f172a'/%3E%3Ccircle cx='108' cy='172' r='12' fill='%23fb7185'/%3E%3Ccircle cx='214' cy='181' r='13' fill='%2338bdf8'/%3E%3C/svg%3E&quot;);"></div>
+            <span class="noise-sticker sticker-pink">flash drop</span>
+          <div class="tile-body">
+            <span class="category-badge cat-fashion">Fashion</span>
+            <h2>Neon Sprint Sneaker</h2>
+            <p>Hot-pink runner with oversized heel foam and a sunset sole splash.</p>
+            <div class="meta-row"><span class="price">$34</span><span class="status-pill" id="status-neon-sneaker">Ready</span></div>
+          </div>
+        </article>
+
+        <article class="market-tile" id="tile-pocket-projector" onclick="openItem('pocket-projector')">
+          <div class="photo-frame" style="background-image:url(&quot;data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 320 220'%3E%3Crect width='320' height='220' fill='%230f172a'/%3E%3Crect x='24' y='28' width='272' height='164' rx='24' fill='%231d4ed8'/%3E%3Ccircle cx='108' cy='111' r='44' fill='%23dbeafe'/%3E%3Ccircle cx='108' cy='111' r='24' fill='%2360a5fa'/%3E%3Crect x='168' y='74' width='72' height='72' rx='16' fill='%2393c5fd'/%3E%3Cpath d='M236 44l58-18v136l-58-24z' fill='%2338bdf8' fill-opacity='.7'/%3E%3C/svg%3E&quot;);"></div>
+            <span class="noise-sticker sticker-blue">tech rush</span>
+          <div class="tile-body">
+            <span class="category-badge cat-tech">Electronics</span>
+            <h2>Pocket Beam Projector</h2>
+            <p>Blue-bodied mini projector with lens glow and angled light cone.</p>
+            <div class="meta-row"><span class="price">$56</span><span class="status-pill" id="status-pocket-projector">Ready</span></div>
+          </div>
+        </article>
+
+        <article class="market-tile" id="tile-rapid-drill" onclick="openItem('rapid-drill')">
+          <div class="photo-frame" style="background-image:url(&quot;data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 320 220'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop stop-color='%23f97316'/%3E%3Cstop offset='1' stop-color='%23fde68a'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='320' height='220' fill='url(%23g)'/%3E%3Cpath d='M82 78h96l22 18h48v32h-31l-13 20h-37l-13-24H96z' fill='%2329232e'/%3E%3Crect x='152' y='54' width='27' height='26' rx='8' fill='%239ca3af'/%3E%3Crect x='74' y='84' width='52' height='14' rx='7' fill='%23fff' fill-opacity='.55'/%3E%3Crect x='122' y='150' width='30' height='46' rx='10' fill='%230f172a'/%3E%3C/svg%3E&quot;);"></div>
+            <span class="noise-sticker sticker-orange">tool week</span>
+          <div class="tile-body">
+            <span class="category-badge cat-tools">Tools</span>
+            <h2>RapidFix Mini Drill</h2>
+            <p>Compact drill silhouette with warm studio lighting and shadow pop.</p>
+            <div class="meta-row"><span class="price">$29</span><span class="status-pill" id="status-rapid-drill">Ready</span></div>
+          </div>
+        </article>
+
+        <article class="market-tile" id="tile-aurora-hairdryer" data-similar-group="dryer" onclick="openItem('aurora-hairdryer')">
+          <div class="photo-frame" style="background-image:url(&quot;data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 320 220'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop stop-color='%23fb7185'/%3E%3Cstop offset='.5' stop-color='%23f472b6'/%3E%3Cstop offset='1' stop-color='%23c084fc'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='320' height='220' fill='url(%23g)'/%3E%3Ccircle cx='250' cy='44' r='28' fill='%23fff4'/%3E%3Cpath d='M95 96c0-17 14-31 31-31h54c29 0 56 16 70 40l16 27c6 11-2 24-14 24h-44v26c0 16-13 29-29 29h-11c-13 0-23-10-23-23v-17l-28-9c-13-4-22-16-22-30V96z' fill='%23fff7fb'/%3E%3Ccircle cx='162' cy='112' r='34' fill='%23f9a8d4'/%3E%3Ccircle cx='162' cy='112' r='18' fill='%23fff'/%3E%3Crect x='118' y='144' width='18' height='46' rx='9' fill='%23be185d'/%3E%3Cpath d='M211 82c18 10 29 20 39 37' stroke='%23fff' stroke-width='9' stroke-linecap='round' opacity='.8'/%3E%3Cpath d='M223 64c16 8 31 16 48 34' stroke='%23fde68a' stroke-width='8' stroke-linecap='round' opacity='.85'/%3E%3C/svg%3E&quot;);"></div>
+            <div class="preview-crop" style="background-image:url(&quot;data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 92 92'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop stop-color='%23fb7185'/%3E%3Cstop offset='.5' stop-color='%23f472b6'/%3E%3Cstop offset='1' stop-color='%23c084fc'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='92' height='92' rx='22' fill='url(%23g)'/%3E%3Cpath d='M20 40c0-8 7-15 15-15h20c11 0 22 6 27 16l5 8c2 4-1 9-6 9H63v12c0 7-6 12-13 12h-4c-6 0-10-4-10-10v-8l-10-3c-4-2-6-5-6-10V40z' fill='%23fff7fb'/%3E%3Ccircle cx='50' cy='46' r='14' fill='%23f9a8d4'/%3E%3Ccircle cx='50' cy='46' r='8' fill='%23fff'/%3E%3Crect x='35' y='58' width='8' height='20' rx='4' fill='%23be185d'/%3E%3Cpath d='M71 31c6 3 10 7 13 13' stroke='%23fff' stroke-width='4' stroke-linecap='round' opacity='.85'/%3E%3C/svg%3E&quot;);"></div>
+            <span class="noise-sticker sticker-pink">beauty pick</span>
+          <div class="tile-body">
+            <span class="category-badge cat-beauty">Beauty &amp; Health</span>
+            <h2>Aurora Ionic Hair Dryer</h2>
+            <p>Pink-and-violet dryer tile with a soft airflow arc and luminous nozzle.</p>
+            <div class="meta-row"><span class="price">$41</span><span class="status-pill" id="status-aurora-hairdryer">Ready</span></div>
+          </div>
+        </article>
+
+        <article class="market-tile" id="tile-aurora-travel-dryer" data-similar-group="dryer" onclick="openItem('aurora-travel-dryer')">
+          <div class="photo-frame" style="background-image:url(&quot;data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 320 220'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop stop-color='%23f472b6'/%3E%3Cstop offset='.5' stop-color='%23fb7185'/%3E%3Cstop offset='1' stop-color='%23c084fc'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='320' height='220' fill='url(%23g)'/%3E%3Ccircle cx='70' cy='42' r='26' fill='%23fff4'/%3E%3Cpath d='M95 96c0-17 14-31 31-31h54c29 0 56 16 70 40l16 27c6 11-2 24-14 24h-44v26c0 16-13 29-29 29h-11c-13 0-23-10-23-23v-17l-28-9c-13-4-22-16-22-30V96z' fill='%23fff8fc'/%3E%3Ccircle cx='160' cy='112' r='34' fill='%23fbcfe8'/%3E%3Ccircle cx='160' cy='112' r='18' fill='%23fff'/%3E%3Crect x='118' y='144' width='18' height='46' rx='9' fill='%239d174d'/%3E%3Cpath d='M213 82c17 11 28 21 37 37' stroke='%23fff' stroke-width='9' stroke-linecap='round' opacity='.8'/%3E%3Cpath d='M220 62c15 8 29 16 44 31' stroke='%23fde68a' stroke-width='8' stroke-linecap='round' opacity='.84'/%3E%3C/svg%3E&quot;);"></div>
+            <div class="preview-crop" style="background-image:url(&quot;data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 92 92'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop stop-color='%23f472b6'/%3E%3Cstop offset='.5' stop-color='%23fb7185'/%3E%3Cstop offset='1' stop-color='%23c084fc'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='92' height='92' rx='22' fill='url(%23g)'/%3E%3Cpath d='M20 40c0-8 7-15 15-15h20c11 0 22 6 27 16l5 8c2 4-1 9-6 9H63v12c0 7-6 12-13 12h-4c-6 0-10-4-10-10v-8l-10-3c-4-2-6-5-6-10V40z' fill='%23fff8fc'/%3E%3Ccircle cx='50' cy='46' r='14' fill='%23fbcfe8'/%3E%3Ccircle cx='50' cy='46' r='8' fill='%23fff'/%3E%3Crect x='35' y='58' width='8' height='20' rx='4' fill='%239d174d'/%3E%3Cpath d='M71 31c6 3 10 7 13 13' stroke='%23fff' stroke-width='4' stroke-linecap='round' opacity='.85'/%3E%3C/svg%3E&quot;);"></div>
+            <span class="noise-sticker sticker-pink">beauty twin</span>
+          <div class="tile-body">
+            <span class="category-badge cat-beauty">Beauty &amp; Health</span>
+            <h2>Aurora Travel Dryer</h2>
+            <p>Second pink dryer tile with nearly the same preview crop to force ambiguous global matching.</p>
+            <div class="meta-row"><span class="price">$36</span><span class="status-pill" id="status-aurora-travel-dryer">Ready</span></div>
+          </div>
+        </article>
+
+        <article class="market-tile" id="tile-citrus-bag" onclick="openItem('citrus-bag')">
+          <div class="photo-frame" style="background-image:url(&quot;data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 320 220'%3E%3Crect width='320' height='220' fill='%23fbbf24'/%3E%3Crect x='78' y='72' width='150' height='110' rx='24' fill='%23fff7ed'/%3E%3Cpath d='M111 86c0-20 15-36 33-36h18c18 0 33 16 33 36' stroke='%23fb923c' stroke-width='12' fill='none' stroke-linecap='round'/%3E%3Ccircle cx='204' cy='118' r='22' fill='%23fdba74'/%3E%3Crect x='105' y='98' width='94' height='56' rx='14' fill='%23f97316' fill-opacity='.7'/%3E%3C/svg%3E&quot;);"></div>
+            <span class="noise-sticker sticker-orange">bag buzz</span>
+          <div class="tile-body">
+            <span class="category-badge cat-accessory">Accessories</span>
+            <h2>Citrus Mini Crossbody</h2>
+            <p>Sunlit orange bag tile with a rounded clasp and bright summer backdrop.</p>
+            <div class="meta-row"><span class="price">$19</span><span class="status-pill" id="status-citrus-bag">Ready</span></div>
+          </div>
+        </article>
+
+        <article class="market-tile" id="tile-teal-pan" onclick="openItem('teal-pan')">
+          <div class="photo-frame" style="background-image:url(&quot;data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 320 220'%3E%3Crect width='320' height='220' fill='%232dd4bf'/%3E%3Ccircle cx='137' cy='116' r='58' fill='%230f766e'/%3E%3Ccircle cx='137' cy='116' r='42' fill='%2399f6e4'/%3E%3Crect x='182' y='107' width='90' height='16' rx='8' fill='%230f172a'/%3E%3Ccircle cx='86' cy='55' r='20' fill='%23fff6'/%3E%3C/svg%3E&quot;);"></div>
+            <span class="noise-sticker sticker-green">cook fast</span>
+          <div class="tile-body">
+            <span class="category-badge cat-home">Home</span>
+            <h2>Teal Sizzle Pan</h2>
+            <p>Cookware tile with glossy teal finish and a dark extended handle.</p>
+            <div class="meta-row"><span class="price">$25</span><span class="status-pill" id="status-teal-pan">Ready</span></div>
+          </div>
+        </article>
+
+        <article class="market-tile" id="tile-orbit-watch" onclick="openItem('orbit-watch')">
+          <div class="photo-frame" style="background-image:url(&quot;data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 320 220'%3E%3Crect width='320' height='220' fill='%2393c5fd'/%3E%3Crect x='135' y='18' width='50' height='54' rx='18' fill='%231e3a8a'/%3E%3Crect x='135' y='150' width='50' height='54' rx='18' fill='%231e3a8a'/%3E%3Crect x='96' y='56' width='128' height='110' rx='34' fill='%230f172a'/%3E%3Ccircle cx='160' cy='111' r='34' fill='%23dbeafe'/%3E%3Cpath d='M160 111l17-16' stroke='%231d4ed8' stroke-width='6' stroke-linecap='round'/%3E%3Cpath d='M160 111l-10 20' stroke='%23ec4899' stroke-width='6' stroke-linecap='round'/%3E%3C/svg%3E&quot;);"></div>
+          <div class="tile-body">
+            <span class="category-badge cat-tech">Electronics</span>
+            <h2>Orbit Smartwatch</h2>
+            <p>Blue lifestyle tile with oversized dial glow and navy wrist straps.</p>
+            <div class="meta-row"><span class="price">$37</span><span class="status-pill" id="status-orbit-watch">Ready</span></div>
+          </div>
+        </article>
+
+        <article class="market-tile" id="tile-flora-dress" onclick="openItem('flora-dress')">
+          <div class="photo-frame" style="background-image:url(&quot;data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 320 220'%3E%3Crect width='320' height='220' fill='%23fbcfe8'/%3E%3Ccircle cx='160' cy='54' r='24' fill='%23fff1f2'/%3E%3Cpath d='M132 84l28 20 28-20 30 86H102z' fill='%23ec4899'/%3E%3Cpath d='M132 84l28 20 28-20' stroke='%23fff' stroke-width='6' fill='none'/%3E%3Ccircle cx='104' cy='150' r='18' fill='%23fff4'/%3E%3Ccircle cx='225' cy='164' r='22' fill='%23fde68a' fill-opacity='.65'/%3E%3C/svg%3E&quot;);"></div>
+          <div class="tile-body">
+            <span class="category-badge cat-fashion">Fashion</span>
+            <h2>Flora Midi Dress</h2>
+            <p>Pink mannequin silhouette with a bright floral backdrop and golden accents.</p>
+            <div class="meta-row"><span class="price">$28</span><span class="status-pill" id="status-flora-dress">Ready</span></div>
+          </div>
+        </article>
+
+        <article class="market-tile" id="tile-satin-brush" onclick="openItem('satin-brush')">
+          <div class="photo-frame" style="background-image:url(&quot;data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 320 220'%3E%3Crect width='320' height='220' fill='%23ddd6fe'/%3E%3Crect x='102' y='56' width='120' height='64' rx='24' fill='%23ffffff'/%3E%3Crect x='144' y='112' width='36' height='74' rx='18' fill='%237c3aed'/%3E%3Cg fill='%23f472b6'%3E%3Ccircle cx='115' cy='70' r='6'/%3E%3Ccircle cx='132' cy='68' r='6'/%3E%3Ccircle cx='149' cy='66' r='6'/%3E%3Ccircle cx='166' cy='64' r='6'/%3E%3Ccircle cx='183' cy='64' r='6'/%3E%3Ccircle cx='200' cy='66' r='6'/%3E%3Ccircle cx='217' cy='68' r='6'/%3E%3C/svg%3E&quot;);"></div>
+          <div class="tile-body">
+            <span class="category-badge cat-beauty">Beauty &amp; Health</span>
+            <h2>Satin Glow Brush</h2>
+            <p>Detangling brush tile with pearl body, berry bristles, and gloss highlights.</p>
+            <div class="meta-row"><span class="price">$14</span><span class="status-pill" id="status-satin-brush">Ready</span></div>
+          </div>
+        </article>
+
+        <article class="market-tile" id="tile-laser-level" onclick="openItem('laser-level')">
+          <div class="photo-frame" style="background-image:url(&quot;data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 320 220'%3E%3Crect width='320' height='220' fill='%23fdba74'/%3E%3Crect x='78' y='86' width='164' height='56' rx='18' fill='%231f2937'/%3E%3Crect x='104' y='100' width='58' height='28' rx='8' fill='%23fde68a'/%3E%3Ccircle cx='218' cy='114' r='20' fill='%23fff'/%3E%3Cpath d='M40 58h240' stroke='%23ef4444' stroke-width='6' stroke-linecap='round' opacity='.85'/%3E%3C/svg%3E&quot;);"></div>
+          <div class="tile-body">
+            <span class="category-badge cat-tools">Tools</span>
+            <h2>Laser Line Level</h2>
+            <p>Orange studio product tile with a bright red beam slicing across the frame.</p>
+            <div class="meta-row"><span class="price">$23</span><span class="status-pill" id="status-laser-level">Ready</span></div>
+          </div>
+        </article>
+
+        <article class="market-tile" id="tile-crystal-lamp" onclick="openItem('crystal-lamp')">
+          <div class="photo-frame" style="background-image:url(&quot;data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 320 220'%3E%3Crect width='320' height='220' fill='%23bae6fd'/%3E%3Cpath d='M160 34l42 60-42 74-42-74z' fill='%23ffffff'/%3E%3Crect x='147' y='154' width='26' height='40' rx='8' fill='%230f172a'/%3E%3Ccircle cx='160' cy='102' r='22' fill='%23e0f2fe'/%3E%3C/svg%3E&quot;);"></div>
+          <div class="tile-body">
+            <span class="category-badge cat-home">Home</span>
+            <h2>Crystal Prism Lamp</h2>
+            <p>Glassy geometric lamp tile with icy blues and a mirrored center highlight.</p>
+            <div class="meta-row"><span class="price">$31</span><span class="status-pill" id="status-crystal-lamp">Ready</span></div>
+          </div>
+        </article>
+
+        <article class="market-tile" id="tile-berry-headphones" onclick="openItem('berry-headphones')">
+          <div class="photo-frame" style="background-image:url(&quot;data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 320 220'%3E%3Crect width='320' height='220' fill='%23c4b5fd'/%3E%3Cpath d='M101 127a60 60 0 0 1 118 0' stroke='%235b21b6' stroke-width='16' fill='none'/%3E%3Crect x='88' y='124' width='36' height='58' rx='18' fill='%237c3aed'/%3E%3Crect x='196' y='124' width='36' height='58' rx='18' fill='%237c3aed'/%3E%3Ccircle cx='96' cy='66' r='16' fill='%23fff5'/%3E%3C/svg%3E&quot;);"></div>
+          <div class="tile-body">
+            <span class="category-badge cat-tech">Electronics</span>
+            <h2>Berry Pop Headphones</h2>
+            <p>Purple over-ear silhouette with playful curve and pastel studio wash.</p>
+            <div class="meta-row"><span class="price">$22</span><span class="status-pill" id="status-berry-headphones">Ready</span></div>
+          </div>
+        </article>
+
+        <article class="market-tile" id="tile-aqua-bottle" onclick="openItem('aqua-bottle')">
+          <div class="photo-frame" style="background-image:url(&quot;data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 320 220'%3E%3Crect width='320' height='220' fill='%2399f6e4'/%3E%3Crect x='136' y='44' width='48' height='132' rx='20' fill='%23ecfeff'/%3E%3Crect x='144' y='30' width='32' height='22' rx='8' fill='%230f766e'/%3E%3Cpath d='M146 118h28' stroke='%2306b6d4' stroke-width='8' stroke-linecap='round'/%3E%3Ccircle cx='230' cy='72' r='20' fill='%23fff5'/%3E%3C/svg%3E&quot;);"></div>
+          <div class="tile-body">
+            <span class="category-badge cat-accessory">Accessories</span>
+            <h2>Aqua Sip Bottle</h2>
+            <p>Mint hydration tile with frosted bottle body and deep teal cap.</p>
+            <div class="meta-row"><span class="price">$12</span><span class="status-pill" id="status-aqua-bottle">Ready</span></div>
+          </div>
+        </article>
+
+        <article class="market-tile" id="tile-sunrise-serum" onclick="openItem('sunrise-serum')">
+          <div class="photo-frame" style="background-image:url(&quot;data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 320 220'%3E%3Crect width='320' height='220' fill='%23fecaca'/%3E%3Crect x='126' y='68' width='68' height='88' rx='18' fill='%23fff7ed'/%3E%3Crect x='142' y='42' width='36' height='32' rx='8' fill='%23fb7185'/%3E%3Ccircle cx='160' cy='110' r='16' fill='%23fb923c'/%3E%3Cpath d='M90 152c26-12 52-18 70-18s48 6 70 18' stroke='%23fff' stroke-width='8' stroke-linecap='round' opacity='.55'/%3E%3C/svg%3E&quot;);"></div>
+          <div class="tile-body">
+            <span class="category-badge cat-beauty">Beauty &amp; Health</span>
+            <h2>Sunrise Vitamin Serum</h2>
+            <p>Peach treatment bottle tile with a soft orange center glow and white sweep.</p>
+            <div class="meta-row"><span class="price">$17</span><span class="status-pill" id="status-sunrise-serum">Ready</span></div>
+          </div>
+        </article>
+
+        <article class="market-tile" id="tile-metal-pliers" onclick="openItem('metal-pliers')">
+          <div class="photo-frame" style="background-image:url(&quot;data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 320 220'%3E%3Crect width='320' height='220' fill='%23fed7aa'/%3E%3Cpath d='M142 58l20 44-20 54-23-8 18-46-17-36z' fill='%2322232a'/%3E%3Cpath d='M178 58l-20 44 20 54 23-8-18-46 17-36z' fill='%2322232a'/%3E%3Ccircle cx='160' cy='101' r='18' fill='%23d1d5db'/%3E%3Ccircle cx='131' cy='170' r='16' fill='%23ef4444'/%3E%3Ccircle cx='189' cy='170' r='16' fill='%23ef4444'/%3E%3C/svg%3E&quot;);"></div>
+          <div class="tile-body">
+            <span class="category-badge cat-tools">Tools</span>
+            <h2>Metal Grip Pliers</h2>
+            <p>Warm workshop tile with silver pivot and dual bright-red handle loops.</p>
+            <div class="meta-row"><span class="price">$15</span><span class="status-pill" id="status-metal-pliers">Ready</span></div>
+          </div>
+        </article>
+
+        <article class="market-tile" id="tile-winter-jacket" onclick="openItem('winter-jacket')">
+          <div class="photo-frame" style="background-image:url(&quot;data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 320 220'%3E%3Crect width='320' height='220' fill='%23bfdbfe'/%3E%3Cpath d='M110 78l28-22h44l28 22 18 78H92z' fill='%230ea5e9'/%3E%3Crect x='150' y='66' width='20' height='108' fill='%23fff' fill-opacity='.55'/%3E%3Cpath d='M118 72l-18 26 20 16' stroke='%230f172a' stroke-width='8' fill='none'/%3E%3Cpath d='M202 72l18 26-20 16' stroke='%230f172a' stroke-width='8' fill='none'/%3E%3C/svg%3E&quot;);"></div>
+          <div class="tile-body">
+            <span class="category-badge cat-fashion">Fashion</span>
+            <h2>Winter Pulse Jacket</h2>
+            <p>Sky-blue puffer tile with bright central zipper highlight and dark toggles.</p>
+            <div class="meta-row"><span class="price">$39</span><span class="status-pill" id="status-winter-jacket">Ready</span></div>
+          </div>
+        </article>
+      </div>
+
+      <aside class="sidebar-stack">
+        <article class="detail-panel" id="detail-panel">
+          <h3>Pick a tile</h3>
+          <p>When the correct preview tile is matched, this panel updates with the opened article summary.</p>
+        </article>
+        <article class="mini-card">
+          <h4>Why this page feels noisy</h4>
+          <ul>
+            <li>Mixed categories next to each other</li>
+            <li>Large promo banners and bright chips</li>
+            <li>Repeated tile shapes and card structure</li>
+            <li>Many image-heavy preview areas competing for attention</li>
+          </ul>
+        </article>
+      </aside>
+    </section>
+  </main>
+
+  <script>
+    const details = {
+      'aurora-hairdryer': {
+        title: 'Aurora Ionic Hair Dryer',
+        text: 'Matched by preview tile. The target beauty item opened while the surrounding chaotic marketplace stayed untouched.',
+      },
+      'neon-sneaker': { title: 'Neon Sprint Sneaker', text: 'Fashion tile opened.' },
+      'pocket-projector': { title: 'Pocket Beam Projector', text: 'Electronics tile opened.' },
+      'rapid-drill': { title: 'RapidFix Mini Drill', text: 'Tool tile opened.' },
+      'aurora-travel-dryer': { title: 'Aurora Travel Dryer', text: 'Similar beauty tile opened.' },
+      'citrus-bag': { title: 'Citrus Mini Crossbody', text: 'Accessory tile opened.' },
+      'teal-pan': { title: 'Teal Sizzle Pan', text: 'Home tile opened.' },
+      'orbit-watch': { title: 'Orbit Smartwatch', text: 'Electronics tile opened.' },
+      'flora-dress': { title: 'Flora Midi Dress', text: 'Fashion tile opened.' },
+      'satin-brush': { title: 'Satin Glow Brush', text: 'Beauty tile opened.' },
+      'laser-level': { title: 'Laser Line Level', text: 'Tool tile opened.' },
+      'crystal-lamp': { title: 'Crystal Prism Lamp', text: 'Home tile opened.' },
+      'berry-headphones': { title: 'Berry Pop Headphones', text: 'Electronics tile opened.' },
+      'aqua-bottle': { title: 'Aqua Sip Bottle', text: 'Accessory tile opened.' },
+      'sunrise-serum': { title: 'Sunrise Vitamin Serum', text: 'Beauty tile opened.' },
+      'metal-pliers': { title: 'Metal Grip Pliers', text: 'Tool tile opened.' },
+      'winter-jacket': { title: 'Winter Pulse Jacket', text: 'Fashion tile opened.' }
+    };
+
+    function openItem(id) {
+      document.body.setAttribute('data-opened-item', id);
+      document.querySelectorAll('.market-tile').forEach((tile) => tile.removeAttribute('data-opened'));
+      const tile = document.getElementById('tile-' + id);
+      const status = document.getElementById('status-' + id);
+      tile.setAttribute('data-opened', 'true');
+      status.textContent = 'Opened';
+
+      const panel = document.getElementById('detail-panel');
+      panel.innerHTML = '<h3>' + details[id].title + '</h3><p>' + details[id].text + '</p>';
+    }
+  </script>
+</body>
+</html>

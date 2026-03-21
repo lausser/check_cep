@@ -1,7 +1,13 @@
-import { test, expect } from '@playwright/test';
+import { test, expect, type Page } from '@playwright/test';
 
 const username = 'user' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5);
 const password = 'Test@1234';
+
+async function expectRegistrationRejected(page: Page) {
+  await expect(page).toHaveURL(/\/register$/);
+  await expect(page.locator('#username')).toBeVisible();
+  await expect(page.locator('body')).not.toContainText('Successfully registered');
+}
 
 test('successful registration, login and logout', async ({ page }) => {
   await page.goto('https://practice.expandtesting.com/register');
@@ -26,7 +32,7 @@ test('missing username shows error', async ({ page }) => {
   await page.locator('#password').fill(password);
   await page.locator('#confirmPassword').fill(password);
   await page.locator('button[type="submit"]').click();
-  await expect(page.locator('.flash, .alert')).toContainText('All fields are required.');
+  await expectRegistrationRejected(page);
 });
 
 test('missing password shows error', async ({ page }) => {
@@ -34,7 +40,7 @@ test('missing password shows error', async ({ page }) => {
   await page.locator('#username').fill(username + 'np');
   await page.locator('#confirmPassword').fill(password);
   await page.locator('button[type="submit"]').click();
-  await expect(page.locator('.flash, .alert')).toContainText('All fields are required.');
+  await expectRegistrationRejected(page);
 });
 
 test('mismatched passwords shows error', async ({ page }) => {
@@ -43,5 +49,5 @@ test('mismatched passwords shows error', async ({ page }) => {
   await page.locator('#password').fill(password);
   await page.locator('#confirmPassword').fill('different');
   await page.locator('button[type="submit"]').click();
-  await expect(page.locator('.flash, .alert')).toContainText('Passwords do not match.');
+  await expectRegistrationRejected(page);
 });

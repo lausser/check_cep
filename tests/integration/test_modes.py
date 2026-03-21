@@ -5,6 +5,7 @@ required). S3 mode tests require the compose stack and are skipped when
 SKIP_INTEGRATION=1. Lightpanda mode re-runs the DOM-only fixtures with
 --browser lightpanda (vision fixtures are skipped — no rendering engine).
 """
+
 import json
 import os
 
@@ -21,25 +22,31 @@ from conftest import run_check_cep, local_test_dir, run_check_cep_s3
 # ---------------------------------------------------------------------------
 
 FIXTURES = [
-    ("tc_pass",          0,    "OK -",       [],                    None),
-    ("tc_register_pass", 0,    "OK -",       [],                    None),
-    ("tc_fail",          2,    "CRITICAL -", [],                    None),
-    ("tc_timeout",       2,    "CRITICAL -", ["--timeout", "15"],   "timed out"),
-    ("tc_syntax",        None, None,         [],                    None),
-    ("tc_vision_basic",     0,    "OK -",       [],                    None),
-    ("tc_vision_ambiguous", 0,    "OK -",       [],                    None),
-    ("tc_vision_color",     0,    "OK -",       [],                    None),
-    ("tc_vision_debug",     0,    "OK -",       [],                    None),
-    ("tc_vision_workflow",  0,    "OK -",       [],                    None),
-    ("tc_vision_example_form", 0,  "OK -",       [],                    None),
-    ("tc_vision_example_console", 0, "OK -",    [],                    None),
-    ("tc_vision_example_login", 0,   "OK -",    [],                    None),
+    ("tc_pass", 0, "OK -", [], None),
+    ("tc_register_pass", 0, "OK -", [], None),
+    ("tc_fail", 2, "CRITICAL -", [], None),
+    ("tc_timeout", 2, "CRITICAL -", ["--timeout", "15"], "timed out"),
+    ("tc_syntax", None, None, [], None),
+    ("tc_vision_basic", 0, "OK -", [], None),
+    ("tc_vision_ambiguous", 0, "OK -", [], None),
+    ("tc_vision_color", 0, "OK -", [], None),
+    ("tc_vision_debug", 0, "OK -", [], None),
+    ("tc_vision_workflow", 0, "OK -", [], None),
+    ("tc_vision_example_form", 0, "OK -", [], None),
+    ("tc_vision_example_console", 0, "OK -", [], None),
+    ("tc_vision_example_login", 0, "OK -", [], None),
+    ("tc_shop_catalog_grid", 0, "OK -", [], None),
+    ("tc_news_homepage_busy", 0, "OK -", [], None),
+    ("tc_marketplace_preview_tile", 0, "OK -", [], None),
+    ("tc_marketplace_anchor_then_target", 0, "OK -", [], None),
+    ("tc_marketplace_real_photo_pair", 0, "OK -", [], None),
 ]
 
 
 # ---------------------------------------------------------------------------
 # Local mode
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.parametrize(
     "fixture_name,expected_exit,expected_prefix,extra_args,keyword",
@@ -63,22 +70,21 @@ def test_local(
         test_dir,
         result_dir,
         extra_args=[
-            "--host-name", "testhost",
-            "--service-description", fixture_name,
-        ] + extra_args,
+            "--host-name",
+            "testhost",
+            "--service-description",
+            fixture_name,
+        ]
+        + extra_args,
         env=omd_env,
         proc_timeout=120,
     )
 
     # Exit code
     if expected_exit is None:
-        assert code in (2, 3), (
-            f"[{fixture_name}] Expected exit 2 or 3, got {code}.\nOutput:\n{output}"
-        )
+        assert code in (2, 3), f"[{fixture_name}] Expected exit 2 or 3, got {code}.\nOutput:\n{output}"
     else:
-        assert code == expected_exit, (
-            f"[{fixture_name}] Expected exit {expected_exit}, got {code}.\nOutput:\n{output}"
-        )
+        assert code == expected_exit, f"[{fixture_name}] Expected exit {expected_exit}, got {code}.\nOutput:\n{output}"
 
     # Output prefix
     if expected_prefix is None:
@@ -92,9 +98,7 @@ def test_local(
 
     # Keyword check (e.g. "timed out" for tc_timeout)
     if keyword:
-        assert keyword in output, (
-            f"[{fixture_name}] Expected '{keyword}' in output.\nOutput:\n{output}"
-        )
+        assert keyword in output, f"[{fixture_name}] Expected '{keyword}' in output.\nOutput:\n{output}"
 
     # Result artefacts — only for tests that complete (not tc_timeout which is killed)
     if fixture_name != "tc_timeout":
@@ -119,8 +123,8 @@ def test_local(
 # We use a dedicated fixture (tc_lp_pass) that stays within these limits.
 
 FIXTURES_LIGHTPANDA = [
-    ("tc_lp_pass", 0,    "OK -",       [],  None),
-    ("tc_syntax",  None, None,         [],  None),
+    ("tc_lp_pass", 0, "OK -", [], None),
+    ("tc_syntax", None, None, [], None),
 ]
 
 
@@ -146,19 +150,21 @@ def test_local_lightpanda(
         test_dir,
         result_dir,
         extra_args=[
-            "--host-name", "testhost",
-            "--service-description", fixture_name,
-            "--browser", "lightpanda",
-        ] + extra_args,
+            "--host-name",
+            "testhost",
+            "--service-description",
+            fixture_name,
+            "--browser",
+            "lightpanda",
+        ]
+        + extra_args,
         env=omd_env,
         proc_timeout=120,
     )
 
     # Exit code
     if expected_exit is None:
-        assert code in (2, 3), (
-            f"[{fixture_name}/lightpanda] Expected exit 2 or 3, got {code}.\nOutput:\n{output}"
-        )
+        assert code in (2, 3), f"[{fixture_name}/lightpanda] Expected exit 2 or 3, got {code}.\nOutput:\n{output}"
     else:
         assert code == expected_exit, (
             f"[{fixture_name}/lightpanda] Expected exit {expected_exit}, got {code}.\nOutput:\n{output}"
@@ -176,9 +182,7 @@ def test_local_lightpanda(
 
     # Keyword check
     if keyword:
-        assert keyword in output, (
-            f"[{fixture_name}/lightpanda] Expected '{keyword}' in output.\nOutput:\n{output}"
-        )
+        assert keyword in output, f"[{fixture_name}/lightpanda] Expected '{keyword}' in output.\nOutput:\n{output}"
 
     # Result artefacts
     steps_json = result_dir / "steps.json"
@@ -197,6 +201,7 @@ def test_local_lightpanda(
 # ---------------------------------------------------------------------------
 # S3 mode — placeholder until Phase 4 (T014)
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.parametrize(
     "fixture_name,expected_exit,expected_prefix,extra_args,keyword",
@@ -233,9 +238,7 @@ def test_s3(
 
     # Exit code
     if expected_exit is None:
-        assert code in (2, 3), (
-            f"[{fixture_name}/s3] Expected exit 2 or 3, got {code}.\nOutput:\n{output}"
-        )
+        assert code in (2, 3), f"[{fixture_name}/s3] Expected exit 2 or 3, got {code}.\nOutput:\n{output}"
     else:
         assert code == expected_exit, (
             f"[{fixture_name}/s3] Expected exit {expected_exit}, got {code}.\nOutput:\n{output}"
@@ -252,9 +255,7 @@ def test_s3(
         )
 
     if keyword:
-        assert keyword in output, (
-            f"[{fixture_name}/s3] Expected '{keyword}' in output.\nOutput:\n{output}"
-        )
+        assert keyword in output, f"[{fixture_name}/s3] Expected '{keyword}' in output.\nOutput:\n{output}"
 
     # Local result artefacts (always present after FR-000 fix)
     if fixture_name != "tc_timeout":
