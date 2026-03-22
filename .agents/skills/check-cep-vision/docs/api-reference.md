@@ -705,14 +705,15 @@ vision.constants.DEFAULT_SCORE_WEIGHTS   // { gray: 0.45, color: 0.55 }
 | Variable | Default | Purpose |
 |----------|---------|---------|
 | `CEP_VISION_HIGHLIGHT_MS` | `700` | Global highlight duration in milliseconds. Set to `0` to disable highlighting. |
-| `CEP_VISION_DEBUG` | unset | When `1`, enables debug artifact writing. |
 | `BROWSER` | `chromium` | When `lightpanda`, all vision functions throw or fall back to DOM. |
+
+Debug artifacts are controlled per-call via `debugDir` and `debugLabel` options — there is no global environment variable for this.
 
 ---
 
 ## Debug Artifacts
 
-When `debugDir` and `debugLabel` are set in options (or `CEP_VISION_DEBUG=1`), the following files are written:
+When `debugDir` is set in options, the following files are written (`debugLabel` defaults to the failure reason if not specified):
 
 | File | Content |
 |------|---------|

@@ -1,4 +1,4 @@
-.PHONY: help image test-image test-local test-all test-clean teaser package-lock
+.PHONY: help image test-image test-local test-all test-clean teaser package-lock _copy-skills
 
 PLAYWRIGHT_VERSION ?= v1.58.2
 

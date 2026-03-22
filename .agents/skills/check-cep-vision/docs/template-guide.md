@@ -71,9 +71,11 @@ await page.waitForLoadState('networkidle');
 
 await page.locator('label:has-text("Username") + input').screenshot({
   path: 'assets/username-row.png',
+  animations: 'disabled',
 });
 await page.locator('button:has-text("Log in")').screenshot({
   path: 'assets/login-btn.png',
+  animations: 'disabled',
 });
 await browser.close();
 ```
@@ -127,13 +129,16 @@ await vision.typeByImage(page, 'assets/name-row.png', 'Alice', {
 
 ### How to determine offset values
 
+When `clickOffset` is provided, the click lands at `match.x + offset.x`,
+`match.y + offset.y` — that is, offset from the **top-left corner** of the
+match (not from center).
+
 1. Open the template image in an image editor.
-2. Note total dimensions (e.g., 500 x 42 pixels). The default click point is
-   the center: (250, 21).
-3. Find the pixel coordinates of the desired click target (e.g., middle of the
-   input field at (450, 21)).
-4. Compute offset from center: `clickOffset.x = 450 - 250 = 200`,
-   `clickOffset.y = 21 - 21 = 0`.
+2. Find the pixel coordinates of the desired click target relative to the
+   top-left corner (e.g., middle of the input field at x=450, y=21).
+3. Set `clickOffset: { x: 450, y: 21 }`.
+
+Without `clickOffset`, the click lands at the match center automatically.
 
 ---
 

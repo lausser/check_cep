@@ -74,6 +74,21 @@ await screen.find("vorname.png").type("Max");
 
 Adding fallback to every step silently changes the original test strategy. If the original author used strict image matching, they had a reason.
 
+### Pragmatic Exception (Rule 3a)
+
+When a live site makes image matching **unstable, too expensive to maintain, or visually impossible** — animated controls, rotating hero banners, frequent corporate CSS redesigns — switching a strict image step to hybrid or pure DOM is permitted. This is not cheating; it is senior engineering.
+
+The requirement: the switch must be a **conscious, documented decision**:
+
+```typescript
+// Original Sakuli: await screen.find("hero-cta.png").click();
+// Pragmatic fallback: hero banner rotates on every page load — image matching
+// is unstable. DOM locator is the reliable engineering choice here.
+await page.getByRole('button', { name: 'Get Started' }).click();
+```
+
+If you find yourself adding fallback to more than ~30% of image steps, the site may have changed so much that a fresh test design (not a migration) would be more honest and maintainable.
+
 ## Rule 4: Site-Specific Helpers in `functions/`
 
 Put site-specific annoyances in `functions/index.ts`:

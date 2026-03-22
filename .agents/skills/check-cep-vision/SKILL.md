@@ -178,8 +178,9 @@ Need to interact with the element?
 | Variable | Default | Purpose |
 |----------|---------|---------|
 | `CEP_VISION_HIGHLIGHT_MS` | `700` | Global highlight duration (ms). Set to `0` to disable. |
-| `CEP_VISION_DEBUG` | unset | When `1`, enables debug artifact writing |
 | `BROWSER` | `chromium` | When `lightpanda`, vision functions throw or fall back to DOM |
+
+Debug artifacts are enabled per-call by setting `debugDir` and `debugLabel` in the options object — there is no global env var for this.
 
 ## Companion Library: check-cep-helpers
 

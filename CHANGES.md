@@ -6,6 +6,48 @@ available in the next container image build.
 
 ---
 
+## Spec 014 — AI Agent Skill Files
+
+**Branch**: `014-ai-agent-skills`
+
+### Summary
+
+Added three AI agent skill folders under `.agents/skills/` that give any
+AI coding agent instant senior-level knowledge for check-cep-vision image
+matching, Sakuli-to-Playwright migration, and general Playwright test
+authoring. Skills are also deployed into the container at
+`/home/pwuser/.agents/skills/`.
+
+### Added
+
+- `check-cep-vision` skill — SKILL.md with quick start, decision tree,
+  region presets, click offsets, hybrid fallback, anti-patterns, and
+  environment reference. Supporting docs: api-reference.md (complete
+  function signatures and types), template-guide.md (capture workflow and
+  crop rules), vision-explainer.md (two-stage matching pipeline internals),
+  troubleshooting.md (diagnosing not-found/ambiguous failures)
+- `sakuli-migration` skill — SKILL.md with 5-rule migration framework
+  ("migrate locator intent, not just test outcome"), translation table,
+  migration definition of done, and Rule 3a pragmatic fallback doctrine.
+  Supporting docs: migration-rules.md, translation-table.md,
+  project-structure.md, cookie-consent.md
+- `playwright-skill` symlink — links to the existing `playwright-skill/`
+  submodule for general Playwright test authoring guidance
+- Makefile `_copy-skills` target — copies `.agents/skills/` (with `cp -rL`
+  to dereference symlinks) into the Docker build context before image
+  builds, cleans up afterward
+- `.gitignore` entry for `src/container/.agents-skills/` (temporary build
+  artifact)
+
+### Changed
+
+- `src/container/Dockerfile`: added COPY for `.agents-skills/` into
+  `/home/pwuser/.agents/skills/` with Gemini-compatible symlink at
+  `/home/pwuser/.gemini/`
+- `Makefile`: `image` and `test-image` targets now depend on `_copy-skills`
+
+---
+
 ## Spec 013 — More Realistic Test Coverage for check_cep
 
 **Branch**: `013-more-tests`

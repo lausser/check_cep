@@ -82,6 +82,9 @@ If the Sakuli script navigates home → clicks through menus → reaches a form,
 ### Rule 3: Fallback Only Where It Already Existed
 Only add `clickByImageOr()` / `typeByImageOr()` if the original Sakuli script already had a fallback mechanism. Do NOT add fallback to strict image steps.
 
+### Rule 3a: Pragmatic Fallback Exception
+When image matching becomes **unstable, too expensive to maintain, or visually impossible** on the live site (animated controls, rotating hero sections, frequent CSS redesigns), a documented switch to DOM or hybrid locators is permitted. The key: the fallback must be an **intentional, documented engineering decision**, not silent cheating. Add a comment explaining why image matching was abandoned for that step.
+
 ### Rule 4: Site-Specific Helpers in `functions/`
 Cookie consent, login flows, and other site-specific annoyances go into `functions/index.ts`. Generic behavior stays in `check-cep-vision`.
 
@@ -119,11 +122,22 @@ What did the original Sakuli step do?
 └── Framework (TestCase, saveResult) → Remove — Playwright handles this
 ```
 
+## Migration Definition of Done
+
+A migration is complete when:
+
+- [ ] The Sakuli scenario flow is preserved (or deviations are documented with rationale)
+- [ ] Each step's locator strategy is classified: strict image / image+DOM fallback / pure DOM / non-migrateable
+- [ ] Cookie/overlay handling is verified and extracted to `functions/`
+- [ ] The test runs successfully inside the `check_cep` container
+- [ ] Debug artifacts are available for image-based steps (debugDir/debugLabel set)
+- [ ] A human familiar with the original Sakuli script can read the migration and understand why each locator choice was made
+
 ## Anti-Patterns
 
 **DO NOT** replace all image steps with DOM selectors. This defeats the purpose of a faithful migration.
 
-**DO NOT** add `clickByImageOr()` fallbacks to every image step. Only add fallback where the original Sakuli script already had one.
+**DO NOT** add `clickByImageOr()` fallbacks to every image step. Only add fallback where the original Sakuli script already had one, or where the live site has made image matching impractical (Rule 3a). In the latter case, document why.
 
 **DO NOT** hard-code absolute pixel coordinates for regions. Derive regions from the 1280x720 viewport or use named presets.
 
