@@ -14,18 +14,24 @@ help:
 	@echo ""
 	@echo "Override Playwright version: make image PLAYWRIGHT_VERSION=v1.60.0"
 
-image:
+image: _copy-skills
 	podman build \
 		--build-arg PLAYWRIGHT_VERSION=$(PLAYWRIGHT_VERSION) \
 		-t localhost/check_cep:$(PLAYWRIGHT_VERSION) \
 		-t localhost/check_cep:latest \
-		src/container/
+		src/container/; \
+	ret=$$?; rm -rf src/container/.agents-skills; exit $$ret
 
-test-image:
+test-image: _copy-skills
 	podman build \
 		--build-arg PLAYWRIGHT_VERSION=$(PLAYWRIGHT_VERSION) \
 		-t check_cep:test \
-		src/container/
+		src/container/; \
+	ret=$$?; rm -rf src/container/.agents-skills; exit $$ret
+
+_copy-skills:
+	rm -rf src/container/.agents-skills
+	cp -rL .agents/skills src/container/.agents-skills
 
 test-local: test-image
 	SKIP_INTEGRATION=1 pytest tests/integration/ -v

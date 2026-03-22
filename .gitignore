@@ -2,6 +2,9 @@
 examples/
 specs/
 
+# Temp build artifact (Makefile copies .agents/skills here for Docker context)
+src/container/.agents-skills/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]

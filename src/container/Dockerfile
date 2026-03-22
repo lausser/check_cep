@@ -115,6 +115,13 @@ RUN apt-get update && apt-get install -y git && \
     rm -rf /tmp/pw-cli && \
     apt-get purge -y git && apt-get autoremove -y && rm -rf /var/lib/apt/lists/*
 
+# Copy AI agent skills (check-cep-vision, sakuli-migration, playwright-skill)
+# These are documentation/reference files for AI coding agents — no build step needed.
+# The Makefile copies .agents/skills/ into .agents-skills/ before building
+# (dereferencing symlinks) so the files are inside the build context.
+COPY --chown=pwuser:pwuser .agents-skills/ /home/pwuser/.agents/skills/
+RUN ln -sf /home/pwuser/.agents/skills /home/pwuser/.gemini/skills/agents
+
 # Copy container-side code
 USER root
 COPY image/run.py /home/pwuser/run.py
