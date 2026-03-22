@@ -160,6 +160,7 @@ def test_local_lightpanda(
         + extra_args,
         env=omd_env,
         proc_timeout=120,
+        spectate=False,
     )
 
     # Exit code

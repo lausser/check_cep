@@ -2,7 +2,6 @@
   "name": "check-cep-container",
   "private": true,
   "dependencies": {
-    "@lightpanda/browser": "latest",
     "@playwright/test": "^1.58.0",
     "check-cep-helpers": "file:./check-cep-helpers",
     "check-cep-vision": "file:./check-cep-vision",

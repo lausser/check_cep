@@ -31,6 +31,22 @@ RUN mkdir -p /home/pwuser/tests /home/pwuser/results /home/pwuser/testscripts-ca
 USER pwuser
 WORKDIR /home/pwuser
 
+# Lightpanda versioning note:
+# - `@lightpanda/browser` is an npm package published from the separate
+#   `lightpanda-io/node-packages` repository. Its published versions are 1.x.
+# - The native Lightpanda browser binary is released from
+#   `lightpanda-io/browser` and currently uses v0.2.x tags.
+# - These are different version streams and must not be assumed to match.
+# - To keep the container reproducible, we pin BOTH:
+#   - the npm wrapper package via package.json/package-lock.json
+#   - the native browser binary via LIGHTPANDA_BROWSER_VERSION below.
+# - We also point LIGHTPANDA_EXECUTABLE_PATH at the final stable install path
+#   before `npm ci` so the package postinstall does not download a moving
+#   nightly binary into ~/.cache and accidentally override the pin.
+ARG LIGHTPANDA_BROWSER_VERSION=v0.2.6
+ENV LIGHTPANDA_DISABLE_TELEMETRY=true \
+    LIGHTPANDA_EXECUTABLE_PATH=/usr/local/bin/lightpanda
+
 # Set environment
 ENV NODE_PATH=/home/pwuser/node_modules \
     PLAYWRIGHT_HTML_OUTPUT_DIR=/home/pwuser/playwright-report \
@@ -53,29 +69,17 @@ RUN if [ -s package-lock.json ]; then \
         npm install @playwright/test; \
     fi
 
-# Install Lightpanda binary to a stable system path.
-# The npm postinstall downloads the binary from the nightly GitHub release, but
-# it also calls the GitHub API to verify the checksum, which often fails during
-# Docker builds due to rate limits.  Bypass this by downloading the binary
-# directly from the well-known nightly release URL whenever the npm cache is empty.
-ENV LIGHTPANDA_DISABLE_TELEMETRY=true
-RUN LPBIN="$HOME/.cache/lightpanda-node/lightpanda" && \
-    ARCH=$(uname -m) && \
-    LP_URL="https://github.com/lightpanda-io/browser/releases/download/nightly/lightpanda-${ARCH}-linux" && \
-    if [ -x "$LPBIN" ]; then \
-      sudo cp "$LPBIN" /usr/local/bin/lightpanda && \
-      sudo chmod 755 /usr/local/bin/lightpanda && \
-      echo "--- Lightpanda binary installed from npm cache ---"; \
-    else \
-      echo "--- npm postinstall did not cache binary; fetching ${LP_URL} ---" && \
-      if curl -fsSL --retry 3 -o /tmp/lightpanda "$LP_URL"; then \
-        chmod +x /tmp/lightpanda && \
-        sudo cp /tmp/lightpanda /usr/local/bin/lightpanda && \
-        echo "--- Lightpanda binary installed to /usr/local/bin/lightpanda ---"; \
-      else \
-        echo "--- WARNING: Lightpanda binary unavailable; lightpanda browser type will not work ---"; \
-      fi; \
-    fi
+# Install the pinned Lightpanda browser binary to the stable runtime path.
+# This intentionally bypasses the npm postinstall cache download so the image
+# never depends on a moving nightly binary during build.
+RUN ARCH=$(uname -m) && \
+    LP_URL="https://github.com/lightpanda-io/browser/releases/download/${LIGHTPANDA_BROWSER_VERSION}/lightpanda-${ARCH}-linux" && \
+    echo "--- Fetching pinned Lightpanda binary ${LIGHTPANDA_BROWSER_VERSION} from ${LP_URL} ---" && \
+    curl -fsSL --retry 3 -o /tmp/lightpanda "$LP_URL" && \
+    chmod 755 /tmp/lightpanda && \
+    sudo cp /tmp/lightpanda /usr/local/bin/lightpanda && \
+    sudo chmod 755 /usr/local/bin/lightpanda && \
+    echo "--- Lightpanda binary installed to /usr/local/bin/lightpanda ---"
 
 # AI Tooling
 ENV GEMINI_YOLO=true \

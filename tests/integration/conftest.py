@@ -4,6 +4,7 @@ Each test gets isolated test and result directories (via tmp_path).
 The container image is taken from the session-scoped cep_image fixture
 (defined in tests/conftest.py) or falls back to CEP_IMAGE env var.
 """
+
 import importlib.machinery
 import importlib.util
 import os
@@ -47,6 +48,7 @@ derive_testident = _mod.derive_testident
 # Fixtures
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture
 def omd_env(tmp_path):
     """Simulate an OMD site environment for check_cep subprocess calls."""
@@ -82,6 +84,7 @@ def test_env(tmp_path, write_playwright_config):
 # Container-owned file cleanup
 # ---------------------------------------------------------------------------
 
+
 def _container_rm(paths):
     """Remove files owned by the container's sub-UID via podman.
 
@@ -93,9 +96,19 @@ def _container_rm(paths):
         if not os.path.exists(p):
             continue
         subprocess.run(
-            ["podman", "run", "--rm", "--user", "root",
-             "--volume", f"{p}:/cleanup:rw,z",
-             CEP_IMAGE, "bash", "-c", "rm -rf /cleanup/*"],
+            [
+                "podman",
+                "run",
+                "--rm",
+                "--user",
+                "root",
+                "--volume",
+                f"{p}:/cleanup:rw,z",
+                CEP_IMAGE,
+                "bash",
+                "-c",
+                "rm -rf /cleanup/*",
+            ],
             capture_output=True,
             timeout=30,
         )
@@ -116,7 +129,8 @@ def container_cleanup():
 # Helper
 # ---------------------------------------------------------------------------
 
-def run_check_cep(test_dir, result_dir, extra_args=None, env=None, proc_timeout=180):
+
+def run_check_cep(test_dir, result_dir, extra_args=None, env=None, proc_timeout=180, spectate=None):
     """Run check_cep as a subprocess and return (combined_output, returncode).
 
     combined_output is stdout + stderr joined for easy assertion.
@@ -124,19 +138,29 @@ def run_check_cep(test_dir, result_dir, extra_args=None, env=None, proc_timeout=
     own --timeout to avoid a race).
     env, if given, is merged on top of the current os.environ.
 
-    When CEP_SPECTATE is set, --headed and slow-motion env vars are injected
-    automatically so the spectator can watch the browser on their desktop.
+    When spectate is True, or CEP_SPECTATE is set and spectate is None,
+    --headed and slow-motion env vars are injected automatically so the
+    spectator can watch the browser on their desktop.
     """
     cmd = [
-        "python3", str(CEP_PLUGIN),
-        "--host-name", "testhost",
-        "--service-description", "pytest_test",
-        "--image", CEP_IMAGE,
-        "--probe-location", "local",
-        "--test-source", "local",
-        "--result-dest", "local",
-        "--test-dir", str(test_dir),
-        "--result-dir", str(result_dir),
+        "python3",
+        str(CEP_PLUGIN),
+        "--host-name",
+        "testhost",
+        "--service-description",
+        "pytest_test",
+        "--image",
+        CEP_IMAGE,
+        "--probe-location",
+        "local",
+        "--test-source",
+        "local",
+        "--result-dest",
+        "local",
+        "--test-dir",
+        str(test_dir),
+        "--result-dir",
+        str(result_dir),
     ]
     if extra_args:
         cmd.extend(extra_args)
@@ -145,7 +169,9 @@ def run_check_cep(test_dir, result_dir, extra_args=None, env=None, proc_timeout=
     if env:
         merged_env.update(env)
 
-    if _SPECTATE:
+    spectate_enabled = bool(merged_env.get("CEP_SPECTATE", "")) if spectate is None else spectate
+
+    if spectate_enabled:
         # Inject --headed unless already present
         if "--headed" not in cmd:
             cmd.append("--headed")
@@ -187,9 +213,17 @@ def local_test_dir(tmp_path, fixture_name, write_playwright_config):
     return dest
 
 
-def run_check_cep_s3(fixture_name, omd_env, tmp_path, cep_image, s3_client,
-                     write_playwright_config, extra_args=None, proc_timeout=180,
-                     cleanup_paths=None):
+def run_check_cep_s3(
+    fixture_name,
+    omd_env,
+    tmp_path,
+    cep_image,
+    s3_client,
+    write_playwright_config,
+    extra_args=None,
+    proc_timeout=180,
+    cleanup_paths=None,
+):
     """Run check_cep in S3 mode against the MinIO compose service.
 
     Uploads scripts.tgz to cep-tests/{testident}/scripts.tgz,
@@ -233,19 +267,32 @@ def run_check_cep_s3(fixture_name, omd_env, tmp_path, cep_image, s3_client,
     result_template = str(tmp_path / "results" / "%h" / "%s")
 
     cmd_extra = [
-        "--host-name", hostname,
-        "--service-description", service,
-        "--image", cep_image,
-        "--test-source", "s3",
-        "--result-dest", "s3",
-        "--s3-endpoint", "http://host.containers.internal:9000",
-        "--aws-access-key-id", "minioadmin",
-        "--aws-secret-access-key", "minioadmin",
-        "--s3-bucket", "cep-tests",
-        "--s3-report-bucket", "cep-reports",
-        "--s3-report-path", "%h/%s",
-        "--testscripts-cache", str(cache_dir),
-        "--result-dir", result_template,
+        "--host-name",
+        hostname,
+        "--service-description",
+        service,
+        "--image",
+        cep_image,
+        "--test-source",
+        "s3",
+        "--result-dest",
+        "s3",
+        "--s3-endpoint",
+        "http://host.containers.internal:9000",
+        "--aws-access-key-id",
+        "minioadmin",
+        "--aws-secret-access-key",
+        "minioadmin",
+        "--s3-bucket",
+        "cep-tests",
+        "--s3-report-bucket",
+        "cep-reports",
+        "--s3-report-path",
+        "%h/%s",
+        "--testscripts-cache",
+        str(cache_dir),
+        "--result-dir",
+        result_template,
     ]
     if extra_args:
         cmd_extra.extend(extra_args)
@@ -287,6 +334,7 @@ def query_loki(host_name: str, service_description: str, timeout: int = 10) -> d
         try:
             with urllib.request.urlopen(url, timeout=3) as resp:
                 import json as _json
+
                 data = _json.loads(resp.read())
                 streams = data.get("data", {}).get("result", [])
                 for stream in streams:
@@ -300,6 +348,5 @@ def query_loki(host_name: str, service_description: str, timeout: int = 10) -> d
         time.sleep(1)
 
     raise TimeoutError(
-        f"No Loki log entry for host_name={host_name!r} "
-        f"service_description={service_description!r} within {timeout}s"
+        f"No Loki log entry for host_name={host_name!r} service_description={service_description!r} within {timeout}s"
     )

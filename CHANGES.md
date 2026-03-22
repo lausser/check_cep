@@ -6,6 +6,42 @@ available in the next container image build.
 
 ---
 
+## Spec 013 — More Realistic Test Coverage for check_cep
+
+**Branch**: `013-more-tests`
+
+### Summary
+
+Expanded the regression suite with a new wave of realistic, visually busy local fixtures and documented the hard-but-fair authoring patterns needed for reliable Playwright + vision tests. The branch also clarified and stabilized the Lightpanda path used by the integration suite.
+
+### Added
+
+- New realistic local fixtures under `tests/fixtures/`:
+  - `tc_shop_catalog_grid`
+  - `tc_news_homepage_busy`
+  - `tc_marketplace_preview_tile`
+  - `tc_marketplace_anchor_then_target`
+  - `tc_marketplace_real_photo_pair`
+- New lessons-learned documents:
+  - `docs/lessons-learned/013-more-tests.md`
+  - `docs/lessons-learned/013-lightpanda-versioning-and-install.md`
+
+### Changed
+
+- `tests/integration/test_modes.py`: registered the new realistic fixtures in the local/S3 matrix and made the Lightpanda lane explicitly ignore spectate mode so `CEP_SPECTATE=1` can still be used for Chromium demo runs.
+- `tests/integration/conftest.py`: added an explicit `spectate` override to `run_check_cep()` so individual integration lanes can disable headed mode intentionally.
+- `WRITING-TESTS.md`: expanded with advanced guidance for realistic clutter fixtures, ambiguity-first assertions, anchor-then-target matching, repeated region tightening, and similar-photo handling, plus direct links to the marketplace examples.
+- `src/container/Dockerfile`: documented the Lightpanda package/binary version split, pinned the standalone browser binary to `v0.2.6`, and made the binary install deterministic at `/usr/local/bin/lightpanda`.
+- `src/container/package.json` / `src/container/package-lock.json`: removed the unused `@lightpanda/browser` npm dependency after confirming the runtime path uses the standalone Lightpanda binary only.
+
+### Fixed
+
+- Lightpanda integration tests now pass on the standalone-binary path without depending on the npm wrapper package.
+- Lightpanda tests no longer fail when the outer pytest run uses `CEP_SPECTATE=1` for Chromium observation.
+- The repository now records the actual Lightpanda integration model clearly: Playwright connects over CDP to `/usr/local/bin/lightpanda serve`, not through the npm package runtime.
+
+---
+
 ## Spec 012 — Failure Screenshot in Playwright Report
 
 **Branch**: `012-failure-screenshot`
