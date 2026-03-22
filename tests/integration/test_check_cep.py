@@ -74,10 +74,10 @@ def test_timeout(test_env):
     (test_env["test_dir"] / "timeout.test.ts").write_text("""\
 import { test } from '@playwright/test';
 
-test('test that never finishes', async ({ page }) => {
-  // waitForTimeout is capped by playwright per-test timeout,
-  // so we use a navigation to a non-routable address to hang indefinitely.
-  await page.goto('http://192.0.2.1/', { timeout: 999000 });
+test('test that never finishes', async () => {
+  // A promise that never resolves — hangs until the container timeout kills us.
+  // (Using a non-routable IP is unreliable: some kernels send RST immediately.)
+  await new Promise(() => {});
 });
 """)
 
