@@ -119,11 +119,23 @@ def cep_image():
         yield image
         return
 
+    import shutil
     image = "check_cep:test"
-    subprocess.run(
-        ["podman", "build", "-t", image, str(_CONTAINER_DIR)],
-        check=True,
-    )
+    # Replicate Makefile's _copy-skills: the Dockerfile COPYs .agents-skills/
+    skills_src = _REPO_ROOT / ".agents" / "skills"
+    skills_dst = _CONTAINER_DIR / ".agents-skills"
+    if skills_dst.exists():
+        shutil.rmtree(skills_dst)
+    if skills_src.exists():
+        shutil.copytree(skills_src, skills_dst, symlinks=False)
+    try:
+        subprocess.run(
+            ["podman", "build", "-t", image, str(_CONTAINER_DIR)],
+            check=True,
+        )
+    finally:
+        if skills_dst.exists():
+            shutil.rmtree(skills_dst)
     yield image
     # No teardown — keep the image for subsequent runs
 
