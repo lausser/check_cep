@@ -904,6 +904,7 @@ Tune the speed with environment variables:
 | `CEP_SPECTATE` | (unset) | Enable spectate mode when set to any non-empty value |
 | `CEP_SLOW_MO` | `400` | Milliseconds delay before each browser action |
 | `CEP_VISION_HIGHLIGHT_MS` | `2000` | Duration of the vision match highlight overlay |
+| `CEP_VNC` | (unset) | VNC fallback — required on Wayland when running vision tests (see below) |
 
 Example — faster pace:
 
@@ -911,6 +912,50 @@ Example — faster pace:
 CEP_SPECTATE=1 CEP_SLOW_MO=150 CEP_VISION_HIGHLIGHT_MS=800 \
   pytest tests/integration/test_modes.py -k "vision_example and local" -v
 ```
+
+#### Spectate Mode on Wayland with Vision Tests (`CEP_VNC=1`)
+
+**Problem**: On a Wayland desktop, `CEP_SPECTATE=1` forwards the Wayland compositor
+socket into the container. Chromium then uses its `--ozone-platform=wayland`
+compositing pipeline, which produces slightly different pixel values in CDP
+screenshots (`page.screenshot()`) compared to headless mode. Vision tests use
+reference images captured headlessly, so the pixel difference causes failures even
+though the test logic is correct.
+
+**Solution**: Add `CEP_VNC=1`. This injects `--vnc`, which makes the container start
+an internal Xtigervnc server instead of forwarding the Wayland socket. Chromium
+connects to the Xtigervnc X11 display and uses the X11 rendering path, whose CDP
+screenshot pixel values match the headless baseline. The test passes, and the
+browser is visible via a VNC viewer.
+
+```bash
+# Wayland + vision tests: use CEP_VNC=1
+CEP_SPECTATE=1 CEP_VNC=1 pytest tests/integration/test_modes.py -k "vision_example and local" -v
+```
+
+When `CEP_VNC=1` is active, `check_cep` prints the connect command to stderr:
+
+```
+VNC: connect with:  vncviewer SecurityTypes=None 127.0.0.1::5900
+```
+
+Open a second terminal and run that command before the container's Xtigervnc server
+starts accepting connections (~4 seconds after the container starts). The VNC viewer
+may prompt to reconnect once.
+
+**When is `CEP_VNC=1` needed?**
+
+| Desktop | Has vision tests | Use |
+|---------|-----------------|-----|
+| Wayland (Fedora, Ubuntu 22.04+, KDE 6) | Yes | `CEP_SPECTATE=1 CEP_VNC=1` |
+| Wayland | No | `CEP_SPECTATE=1` |
+| X11 | Yes or No | `CEP_SPECTATE=1` |
+
+If you are not sure which display server you are running: `echo $WAYLAND_DISPLAY`
+returns a non-empty value (e.g. `wayland-0`) on Wayland.
+
+**Host requirement**: `vncviewer` must be installed on the host machine.
+On Fedora: `dnf install tigervnc`. On Debian/Ubuntu: `apt install tigervnc-viewer`.
 
 ### Debug Artifacts
 

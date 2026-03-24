@@ -17,6 +17,7 @@ RUN apt-get update && \
     python3-pip \
     sudo \
     fontconfig \
+    tigervnc-standalone-server \
     && apt-get clean && \
     rm -rf /var/lib/apt/lists/* && \
     pip install --no-cache-dir --break-system-packages boto3 && \

@@ -487,6 +487,62 @@ your ownership — no `chown` needed. This differs from normal (headless) mode
 where `chown root:root` inside the container transfers ownership to the host
 user (see [File Ownership](#5-file-ownership-in-local-mode)).
 
+### VNC Fallback for Wayland + Vision Tests (`--vnc`)
+
+On most desktops `--headed` is all you need: the browser window opens natively on
+your Wayland or X11 session. There is one exception:
+
+> **Wayland + vision image-matching tests**
+>
+> When `--headed` forwards the Wayland socket into the container, Chromium
+> activates its `--ozone-platform=wayland` compositing pipeline. That pipeline
+> produces slightly different pixel values in CDP screenshots (`page.screenshot()`)
+> compared to headless mode. Vision tests compare against reference images
+> captured headlessly, so the pixel difference causes them to fail even though
+> the test logic is correct.
+
+The `--vnc` flag is the workaround. Instead of forwarding the host's Wayland
+socket, the container starts an internal Xtigervnc server (X11 + VNC in one
+process) and Chromium connects to it. Because Chromium uses the X11 rendering
+path, CDP screenshots match the headless reference images and vision tests pass.
+The container publishes the VNC server on `127.0.0.1:5900`; connect to it with
+a VNC viewer on the host to watch the browser.
+
+```bash
+# 1. Start the test with --vnc  (the hint appears on stderr)
+python3 src/check_cep \
+  --headed --vnc \
+  --host-name testhost \
+  --service-description Consol_Homepage \
+  --image localhost/check_cep:latest \
+  --probe-location local \
+  --test-source local \
+  --result-dest local \
+  --test-dir /tmp/my-first-test \
+  --result-dir /tmp/my-first-results \
+  --timeout 60
+
+# 2. In a second terminal, connect to the VNC server
+vncviewer SecurityTypes=None 127.0.0.1::5900
+```
+
+`check_cep` prints `VNC: connect with: vncviewer SecurityTypes=None 127.0.0.1::5900`
+to stderr before the container starts, so you know when to connect. Xtigervnc
+takes about 4 seconds to start; the VNC viewer may need to reconnect once.
+
+**When to use `--headed` vs `--headed --vnc`:**
+
+| Situation | Use |
+|-----------|-----|
+| Debugging any test on Wayland or X11 | `--headed` |
+| Vision tests on Wayland (screenshots must match headless) | `--headed --vnc` |
+| Interactive shell (`--shell`) | `--headed --shell` (VNC not supported with `--shell`) |
+| X11 desktop (no Wayland) | `--headed` (VNC unnecessary) |
+
+**Host requirement**: `tigervnc` must be installed for the VNC viewer
+(`dnf install tigervnc` on Fedora, `apt install tigervnc-viewer` on Debian/Ubuntu).
+The container already includes `tigervnc-standalone-server`.
+
 ### Error Messages
 
 If the environment doesn't support headed mode, `check_cep` exits UNKNOWN:
@@ -578,6 +634,7 @@ and writes results to `$OMD_ROOT/var/tmp/check_cep/webserver01/E2E_Login_Check/`
 | `--debug` | off | Verbose logging |
 | `--shell` | off | Interactive bash shell |
 | `--headed` | off | Headed browser on your desktop (Wayland/X11 auto-detected, debug only) |
+| `--vnc` | off | VNC fallback for headed mode — use with `--headed` on Wayland when vision tests must match headless references (see [VNC Fallback](#vnc-fallback-for-wayland--vision-tests---vnc)) |
 
 ### Performance Data
 
@@ -746,6 +803,17 @@ CEP_SLOW_MO=200 CEP_VISION_HIGHLIGHT_MS=1000 CEP_SPECTATE=1 pytest tests/integra
 |----------|-------------------|--------|
 | `CEP_SLOW_MO` | 400 | Milliseconds Playwright pauses between each action |
 | `CEP_VISION_HIGHLIGHT_MS` | 2000 | How long the vision highlight box stays visible |
+| `CEP_VNC` | (unset) | When set alongside `CEP_SPECTATE=1`, injects `--vnc` so the container uses Xtigervnc instead of forwarding the host display. Required on Wayland to keep vision tests passing. |
+
+On a Wayland desktop, use `CEP_VNC=1` together with `CEP_SPECTATE=1`:
+
+```bash
+# Wayland: vision tests + spectate mode — connect manually with vncviewer
+CEP_SPECTATE=1 CEP_VNC=1 pytest tests/integration/test_modes.py -k "tc_vision and local" -v
+```
+
+When `CEP_VNC=1` is set, `check_cep` prints the vncviewer connect command to
+stderr. Open a second terminal and run it to watch the browser.
 
 ### Test Structure
 

@@ -272,6 +272,31 @@ def main() -> int:
     headed = bool(os.environ.get("HEADED", ""))
     browser = os.environ.get("BROWSER", "chromium")
 
+    # Headed mode without a forwarded display: start Xvfb on :1 and serve
+    # it over x11vnc on port 5900.  This happens on Wayland hosts where the
+    # host-side check_cep publishes port 5900 instead of forwarding the
+    # Wayland socket, keeping Chromium on the X11 rendering path (consistent
+    # with headless screenshots) while still allowing the spectator to watch
+    # via a VNC viewer.
+    if headed and not os.environ.get("WAYLAND_DISPLAY") and not os.environ.get("DISPLAY"):
+        # Xtigervnc is a combined X server + VNC server in one process.
+        # It avoids the XSHM framebuffer-sharing problems that make x11vnc
+        # show a black screen when paired with Xvfb in containers.
+        subprocess.Popen(
+            ["Xtigervnc", ":1",
+             "-geometry", "1280x720", "-depth", "24",
+             "-SecurityTypes", "None",
+             "-rfbport", "5900",
+             "-ac"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        time.sleep(1)
+        os.environ["DISPLAY"] = ":1"
+        # Give the VNC viewer on the host time to connect and render the
+        # desktop before Playwright starts — otherwise tests finish before
+        # the spectator sees anything.
+        time.sleep(3)
+
     # Configure logging
     if debug:
         logging.basicConfig(level=logging.DEBUG)

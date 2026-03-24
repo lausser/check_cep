@@ -34,6 +34,12 @@ _SPECTATE = bool(os.environ.get("CEP_SPECTATE", ""))
 _SPECTATE_HIGHLIGHT_MS = os.environ.get("CEP_VISION_HIGHLIGHT_MS", "2000")
 _SPECTATE_SLOW_MO = os.environ.get("CEP_SLOW_MO", "400")
 
+# VNC fallback: when CEP_VNC=1 is also set alongside CEP_SPECTATE=1,
+# --vnc is injected so the container starts Xtigervnc internally instead
+# of forwarding the host display.  Use on Wayland hosts where direct
+# display forwarding fails (e.g. Wayland + SELinux).
+_VNC = bool(os.environ.get("CEP_VNC", ""))
+
 # ---------------------------------------------------------------------------
 # Import derive_testident directly from src/check_cep (single source of truth)
 # ---------------------------------------------------------------------------
@@ -175,6 +181,10 @@ def run_check_cep(test_dir, result_dir, extra_args=None, env=None, proc_timeout=
         # Inject --headed unless already present
         if "--headed" not in cmd:
             cmd.append("--headed")
+        # VNC fallback (CEP_VNC=1): use Xtigervnc inside container instead of
+        # forwarding the host display directly.
+        if _VNC and "--vnc" not in cmd:
+            cmd.append("--vnc")
         # Bump the container-side Playwright timeout (slowMo + highlights add up)
         if "--timeout" not in cmd:
             cmd.extend(["--timeout", "300"])

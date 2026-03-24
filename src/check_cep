@@ -233,6 +233,7 @@ class RunConfig:
     debug: bool
     shell: bool
     headed: bool
+    vnc: bool
     browser: str
 
     # Reporting
@@ -583,7 +584,7 @@ def build_env_vars(ctx: RunContext) -> Dict[str, str]:
     if ctx.config.debug:
         env["DEBUG"] = "1"
 
-    if ctx.config.headed:
+    if ctx.config.headed or ctx.config.vnc:
         env["HEADED"] = "1"
 
     env["BROWSER"] = ctx.config.browser
@@ -668,25 +669,31 @@ def build_podman_command(ctx: RunContext, container_bin: str,
         cmd.extend(["--volume", f"{os.path.abspath(cache_dir)}:/home/pwuser/testscripts-cache:rw,z"])
 
     # Headed mode: display forwarding for debug
-    if ctx.config.headed:
+    if ctx.config.headed or ctx.config.vnc:
         cmd.extend([
             f"--userns=keep-id:uid={CONTAINER_UID},gid={CONTAINER_GID}",
             "--security-opt", "label=disable",
             "--ipc=host",
         ])
-        if detect_display_server() == "wayland":
-            wayland_display = os.environ["WAYLAND_DISPLAY"]
-            xdg_runtime = os.environ["XDG_RUNTIME_DIR"]
-            host_socket = os.path.join(xdg_runtime, wayland_display)
-            container_runtime = f"/run/user/{CONTAINER_UID}"
+        if ctx.config.vnc:
+            # VNC fallback: container starts Xtigervnc internally and serves
+            # it on port 5900.  The host connects with vncviewer.  Use this
+            # when direct display forwarding fails (e.g. Wayland + SELinux).
+            cmd.extend(["--publish", "127.0.0.1:5900:5900"])
+        elif detect_display_server() == "wayland":
+            # Wayland: forward the compositor socket so the browser window
+            # appears on-screen via the native Wayland path.
+            wayland_display = os.environ.get("WAYLAND_DISPLAY", "wayland-0")
+            xdg_runtime = os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")
+            wayland_socket = os.path.join(xdg_runtime, wayland_display)
             cmd.extend([
-                "--volume", f"{host_socket}:{container_runtime}/{wayland_display}:ro",
+                "--volume", f"{wayland_socket}:{wayland_socket}:ro",
                 "--env", f"WAYLAND_DISPLAY={wayland_display}",
-                "--env", f"XDG_RUNTIME_DIR={container_runtime}",
+                "--env", f"XDG_RUNTIME_DIR={xdg_runtime}",
             ])
         else:
             display = os.environ.get("DISPLAY", ":0")
-            xauthority = os.path.expanduser("~/.Xauthority")
+            xauthority = os.environ.get("XAUTHORITY", os.path.expanduser("~/.Xauthority"))
             if display.startswith(":"):
                 # Local X11 — forward via Unix socket
                 cmd.extend([
@@ -728,6 +735,8 @@ def execute_container(cmd: List[str], shell_mode: bool = False) -> Tuple[bytes, 
     else:
         proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         return proc.stdout, proc.stderr, proc.returncode
+
+
 
 
 # ---------------------------------------------------------------------------
@@ -1301,6 +1310,10 @@ def build_argument_parser() -> ArgumentParser:
                         help="Start container with bash instead of run.py")
     parser.add_argument("--headed", action="store_true", default=False,
                         help="Run browsers in headed mode (Wayland/X11 auto-detected, debug only)")
+    parser.add_argument("--vnc", action="store_true", default=False,
+                        help="VNC fallback for headed mode: start Xtigervnc inside the container "
+                             "and open vncviewer on the host. Use when direct display forwarding "
+                             "fails (e.g. Wayland + SELinux). Requires tigervnc on the host.")
     parser.add_argument("--browser", default="chromium",
                         choices=["chromium", "lightpanda"],
                         help="Browser engine (default: chromium)")
@@ -1366,6 +1379,7 @@ def main() -> int:
         debug=args.debug,
         shell=args.shell,
         headed=args.headed,
+        vnc=args.vnc,
         browser=args.browser,
         report_url=args.report_url,
         href_target=args.href_target,
@@ -1424,7 +1438,10 @@ def main() -> int:
     # ---------------------------------------------------------------------------
     # Headed mode pre-flight
     # ---------------------------------------------------------------------------
-    if config.headed:
+    if config.vnc:
+        # VNC mode supplies its own display — no host display needed.
+        pass
+    elif config.headed:
         headed_error = validate_headed_mode()
         if headed_error:
             return nagios_exit("UNKNOWN", headed_error)
@@ -1513,6 +1530,9 @@ def main() -> int:
         cgroup_poller = CgroupPoller(ctx.container_name, DEFAULT_CPU_COUNT)
         cgroup_poller.start()
 
+    if ctx.config.vnc:
+        print("VNC: connect with:  vncviewer SecurityTypes=None 127.0.0.1::5900",
+              file=sys.stderr, flush=True)
     container_start_time = time.time()
     stdout, stderr, returncode = execute_container(cmd, shell_mode=ctx.config.shell)
 

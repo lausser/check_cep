@@ -20,6 +20,21 @@ EXTRA=(
   --use-gl=swiftshader
 )
 
+# Headed mode via an X11 display (Xvfb or real X11 desktop).
+# Drop --disable-gpu so the compositor can blit to the X window (otherwise
+# the window stays black).  SwiftShader provides software GL so there is no
+# real GPU dependency.  --disable-gpu-compositing and
+# --disable-gpu-rasterization are also omitted for the same reason.
+if [ -n "${DISPLAY:-}" ] && [ -z "${WAYLAND_DISPLAY:-}" ]; then
+  EXTRA=(
+    --disable-dev-shm-usage
+    --disable-accelerated-2d-canvas
+    --disable-accelerated-video-decode
+    --disable-accelerated-video-encode
+    --use-gl=swiftshader
+  )
+fi
+
 # Wayland display forwarding (--headed / --shell mode).
 [ -n "${WAYLAND_DISPLAY:-}" ] && \
   EXTRA+=(--enable-features=UseOzonePlatform --ozone-platform=wayland)
