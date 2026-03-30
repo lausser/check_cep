@@ -1,0 +1,3 @@
+[submodule "playwright-skill"]
+	path = playwright-skill
+	url = https://github.com/lackeyjb/playwright-skill.git
