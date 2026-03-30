@@ -1,14 +1,11 @@
 ARG PLAYWRIGHT_VERSION=v1.58.2
-FROM mcr.microsoft.com/playwright:${PLAYWRIGHT_VERSION}-noble
+FROM mcr.microsoft.com/playwright:${PLAYWRIGHT_VERSION}-noble AS base
 
 # Re-declare ARG after FROM
 ARG PLAYWRIGHT_VERSION=v1.58.2
 ENV PLAYWRIGHT_VERSION=${PLAYWRIGHT_VERSION} \
     DEBIAN_FRONTEND="noninteractive" \
     TZ="UTC"
-
-# Helpful addons for assisted writing of test scripts
-ARG AI_NODE_PACKAGES="@google/gemini-cli @playwright/cli"
 
 # Install Python 3, system dependencies, and configure sudo for pwuser
 # (sudo needed for `npx playwright install` to install browser system deps)
@@ -48,10 +45,11 @@ ARG LIGHTPANDA_BROWSER_VERSION=v0.2.6
 ENV LIGHTPANDA_DISABLE_TELEMETRY=true \
     LIGHTPANDA_EXECUTABLE_PATH=/usr/local/bin/lightpanda
 
-# Set environment
+# Set environment — consolidate all PATH additions here so cep_codegen works in base
 ENV NODE_PATH=/home/pwuser/node_modules \
     PLAYWRIGHT_HTML_OUTPUT_DIR=/home/pwuser/playwright-report \
-    NODE_OPTIONS="--max-http-header-size=120480"
+    NODE_OPTIONS="--max-http-header-size=120480" \
+    PATH="/home/pwuser/.local/bin:/home/pwuser/node_modules/.bin:/home/pwuser/.npm-global/bin:${PATH}"
 
 # Copy local helper modules (before npm install so local file: deps resolve)
 COPY --chown=pwuser:pwuser check-cep-vision/ ./check-cep-vision/
@@ -82,21 +80,6 @@ RUN ARCH=$(uname -m) && \
     sudo chmod 755 /usr/local/bin/lightpanda && \
     echo "--- Lightpanda binary installed to /usr/local/bin/lightpanda ---"
 
-# AI Tooling
-ENV GEMINI_YOLO=true \
-    GEMINI_CONFIG_HOME="/home/pwuser/.gemini" \
-    PATH="/home/pwuser/.local/bin:/home/pwuser/node_modules/.bin:${PATH}"
-RUN if [ -n "$AI_NODE_PACKAGES" ]; then \
-        mkdir -p /home/pwuser/.gemini && \
-        echo "--- Installing AI Addons locally ---" && \
-        npm install $AI_NODE_PACKAGES && \
-        # Create settings.json to silence root warnings and telemetry
-        printf '{\n  "security": {\n    "folderTrust": {\n      "enabled": false\n    },\n    "auth": {\n      "selectedType": "gemini-api-key"\n    },\n    "enablePermanentToolApproval": true\n  },\n  "ui": {\n    "showHomeDirectoryWarning": false,\n    "theme": "Default Light",\n    "showCompatibilityWarnings": false\n  },\n  "general": {\n    "defaultApprovalMode": "default"\n  }\n}\n' > /home/pwuser/.gemini/settings.json; \
-    fi
-
-# Ensure global npm binaries are in the PATH
-ENV PATH="/home/pwuser/.npm-global/bin:${PATH}"
-
 # 3. Playwright Browser Engines
 RUN npx playwright install --with-deps msedge chrome && \
     npm config set update-notifier false && \
@@ -105,23 +88,6 @@ RUN npx playwright install --with-deps msedge chrome && \
 
 # Cleanup npm artifacts
 RUN rm -f package.json package-lock.json
-
-# Install git temporarily and fetch the skills
-USER root
-RUN apt-get update && apt-get install -y git && \
-    git clone --depth 1 https://github.com/microsoft/playwright-cli.git /tmp/pw-cli && \
-    mkdir -p /home/pwuser/.gemini/skills && \
-    cp -r /tmp/pw-cli/skills/* /home/pwuser/.gemini/skills/ && \
-    chown -R pwuser:pwuser /home/pwuser/.gemini && \
-    rm -rf /tmp/pw-cli && \
-    apt-get purge -y git && apt-get autoremove -y && rm -rf /var/lib/apt/lists/*
-
-# Copy AI agent skills (check-cep-vision, sakuli-migration, playwright-skill)
-# These are documentation/reference files for AI coding agents — no build step needed.
-# The Makefile copies .agents/skills/ into .agents-skills/ before building
-# (dereferencing symlinks) so the files are inside the build context.
-COPY --chown=pwuser:pwuser .agents-skills/ /home/pwuser/.agents/skills/
-RUN ln -sf /home/pwuser/.agents/skills /home/pwuser/.gemini/skills/agents
 
 # Copy container-side code
 USER root
@@ -140,6 +106,40 @@ RUN CHROME=$(node -e "const { chromium } = require('playwright'); console.log(ch
     mkdir -p /home/pwuser/.local/bin && \
     printf '#!/bin/bash\nexec npx playwright codegen "$@"\n' > /home/pwuser/.local/bin/cep_codegen && \
     chmod 755 /home/pwuser/run.py /home/pwuser/.local/bin/cep_codegen "$CHROME" && \
+    chown -R pwuser:pwuser /home/pwuser
+
+USER pwuser
+CMD ["python3", "./run.py"]
+
+# ── AI STAGE ───────────────────────────────────────────────────────────────
+FROM base AS ai
+
+# Gemini-specific env vars (not needed in base image)
+ENV GEMINI_YOLO=true \
+    GEMINI_CONFIG_HOME="/home/pwuser/.gemini"
+
+# AI npm packages (Gemini CLI + playwright-cli)
+ARG AI_NODE_PACKAGES="@google/gemini-cli @playwright/cli"
+RUN mkdir -p /home/pwuser/.gemini && \
+    echo "--- Installing AI Addons locally ---" && \
+    npm install $AI_NODE_PACKAGES && \
+    printf '{\n  "security": {\n    "folderTrust": {\n      "enabled": false\n    },\n    "auth": {\n      "selectedType": "gemini-api-key"\n    },\n    "enablePermanentToolApproval": true\n  },\n  "ui": {\n    "showHomeDirectoryWarning": false,\n    "theme": "Default Light",\n    "showCompatibilityWarnings": false\n  },\n  "general": {\n    "defaultApprovalMode": "default"\n  }\n}\n' > /home/pwuser/.gemini/settings.json
+
+# Install git temporarily; clone playwright-cli skills AND playwright-skill in one layer
+USER root
+RUN apt-get update && apt-get install -y git && \
+    git clone --depth 1 https://github.com/microsoft/playwright-cli.git /tmp/pw-cli && \
+    git clone --depth 1 https://github.com/lackeyjb/playwright-skill.git /tmp/pw-skill && \
+    mkdir -p /home/pwuser/.gemini/skills && \
+    cp -r /tmp/pw-cli/skills/* /home/pwuser/.gemini/skills/ && \
+    cp -r /tmp/pw-skill/skills/playwright-skill /home/pwuser/.gemini/skills/ && \
+    chown -R pwuser:pwuser /home/pwuser/.gemini && \
+    rm -rf /tmp/pw-cli /tmp/pw-skill && \
+    apt-get purge -y git && apt-get autoremove -y && rm -rf /var/lib/apt/lists/*
+
+# Copy local agent skills (check-cep-vision + sakuli-migration only)
+COPY --chown=pwuser:pwuser .agents-skills/ /home/pwuser/.agents/skills/
+RUN ln -sf /home/pwuser/.agents/skills /home/pwuser/.gemini/skills/agents && \
     chown -R pwuser:pwuser /home/pwuser
 
 USER pwuser

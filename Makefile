@@ -1,11 +1,13 @@
-.PHONY: help image test-image test-local test-all test-clean teaser package-lock _copy-skills
+.PHONY: help image test-image image-ai test-image-ai test-local test-all test-clean teaser package-lock _copy-skills
 
 PLAYWRIGHT_VERSION ?= v1.58.2
 
 help:
 	@echo "Available targets:"
-	@echo "  image                             Build production image (localhost/check_cep:latest + :$(PLAYWRIGHT_VERSION))"
-	@echo "  test-image                        Build check_cep:test image"
+	@echo "  image                             Build lean production image (no AI tools) (localhost/check_cep:latest + :$(PLAYWRIGHT_VERSION))"
+	@echo "  test-image                        Build lean test image (no AI tools)"
+	@echo "  image-ai                          Build AI-enhanced production image (Gemini, playwright-cli, skills) (localhost/check_cep:ai-latest + :ai-$(PLAYWRIGHT_VERSION))"
+	@echo "  test-image-ai                     Build AI-enhanced test image (check_cep:test-ai)"
 	@echo "  test-local                        Run tests without external services (fast)"
 	@echo "  test-all                          Run full suite (requires podman-compose stack)"
 	@echo "  test-clean                        Tear down the podman-compose stack"
@@ -14,18 +16,33 @@ help:
 	@echo ""
 	@echo "Override Playwright version: make image PLAYWRIGHT_VERSION=v1.60.0"
 
-image: _copy-skills
+image:
 	podman build \
 		--build-arg PLAYWRIGHT_VERSION=$(PLAYWRIGHT_VERSION) \
+		--target base \
 		-t localhost/check_cep:$(PLAYWRIGHT_VERSION) \
 		-t localhost/check_cep:latest \
+		src/container/
+
+test-image:
+	podman build \
+		--build-arg PLAYWRIGHT_VERSION=$(PLAYWRIGHT_VERSION) \
+		--target base \
+		-t check_cep:test \
+		src/container/
+
+image-ai: _copy-skills
+	podman build \
+		--build-arg PLAYWRIGHT_VERSION=$(PLAYWRIGHT_VERSION) \
+		-t localhost/check_cep:ai-$(PLAYWRIGHT_VERSION) \
+		-t localhost/check_cep:ai-latest \
 		src/container/; \
 	ret=$$?; rm -rf src/container/.agents-skills; exit $$ret
 
-test-image: _copy-skills
+test-image-ai: _copy-skills
 	podman build \
 		--build-arg PLAYWRIGHT_VERSION=$(PLAYWRIGHT_VERSION) \
-		-t check_cep:test \
+		-t check_cep:test-ai \
 		src/container/; \
 	ret=$$?; rm -rf src/container/.agents-skills; exit $$ret
 
