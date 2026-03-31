@@ -1,96 +1,19 @@
-"""Unit tests for RunConfig, RunContext, and make_ctx/make_config helpers
-(T013-T019 — 010-run-context)."""
-import importlib.machinery
-import importlib.util
-import sys
-from pathlib import Path
-
+"""Unit tests for RunConfig, RunContext, build_env_vars, and build_podman_command."""
 import pytest
 
-# ---------------------------------------------------------------------------
-# Load the check_cep module directly (no package install required)
-# ---------------------------------------------------------------------------
-
-_PLUGIN = Path(__file__).parent.parent.parent / "src" / "check_cep"
-_loader = importlib.machinery.SourceFileLoader("check_cep_mod", str(_PLUGIN))
-_spec = importlib.util.spec_from_file_location("check_cep_mod", str(_PLUGIN), loader=_loader)
-_mod = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(_mod)
-sys.modules.setdefault("check_cep_mod", _mod)
-
-RunConfig = _mod.RunConfig
-RunContext = _mod.RunContext
-derive_testname = _mod.derive_testname
-derive_testident = _mod.derive_testident
-sanitize_container_name = _mod.sanitize_container_name
-resolve_path_template = _mod.resolve_path_template
-build_env_vars = _mod.build_env_vars
-resolve_report_url = _mod.resolve_report_url
-
-
-# ---------------------------------------------------------------------------
-# Test helpers (T013, T014, T015)
-# ---------------------------------------------------------------------------
-
-def make_config(**overrides) -> RunConfig:
-    """Build a RunConfig with sensible test defaults. Override any field by name."""
-    defaults = dict(
-        host_name="testhost",
-        service_description="TestService",
-        image="ghcr.io/example/playwright:latest",
-        probe_location="local",
-        test_source="local",
-        result_dest="local",
-        logging="none",
-        test_dir="/omd/etc/check_cep/tests/%h/%s",
-        result_dir="/omd/var/tmp/check_cep/%h/%s/%t",
-        testscripts_cache="/omd/var/tmp/check_cep_cache",
-        report_retention=None,
-        timeout=60,
-        memory_limit="2g",
-        debug=False,
-        shell=False,
-        headed=False,
-        browser="chromium",
-        report_url=None,
-        href_target="_blank",
-        registry_username=None,
-        registry_password=None,
-        s3_endpoint=None,
-        aws_access_key_id=None,
-        aws_secret_access_key=None,
-        s3_bucket=None,
-        s3_report_bucket=None,
-        s3_report_path=None,
-        s3_report_url=None,
-        loki_endpoint=None,
-        loki_user=None,
-        loki_password=None,
-        loki_proxy=None,
-        current_status=None,
-    )
-    defaults.update(overrides)
-    return RunConfig(**defaults)
-
-
-def make_ctx(**overrides) -> RunContext:
-    """Build a RunContext with sensible test defaults. Override any field by name."""
-    defaults = dict(
-        hostname="testhost",
-        servicedescription="TestService",
-        testname="testhost/TestService",
-        testident="testhost__TestService",
-        container_name="testhost_TestService",
-        start_time=1700000000.0,
-        started_str="1700000000",
-        timeout_deadline=1700000060.0,
-        result_dir="/tmp/test_results",
-        omd_root="",
-        pid_file="/tmp/var/tmp/check_cep.testhost__TestService.pid",
-        config=make_config(),
-    )
-    defaults.update(overrides)
-    return RunContext(**defaults)
+from conftest import (
+    RunConfig,
+    RunContext,
+    derive_testname,
+    derive_testident,
+    sanitize_container_name,
+    resolve_path_template,
+    build_env_vars,
+    build_podman_command,
+    resolve_report_url,
+    make_config,
+    make_ctx,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -199,3 +122,89 @@ def test_resolve_report_url_empty_bucket():
     )
     url = resolve_report_url(ctx, "0")
     assert url == "https://r//end"
+
+
+# ---------------------------------------------------------------------------
+# build_env_vars: TEST_ARTIFACT / S3_BUCKET (017-s3-tgz-source, T009)
+# ---------------------------------------------------------------------------
+
+def test_build_env_vars_test_artifact_present():
+    ctx = make_ctx(config=make_config(test_artifact="/mybucket/checks/login.tgz"))
+    env = build_env_vars(ctx)
+    assert env["TEST_ARTIFACT"] == "/mybucket/checks/login.tgz"
+
+
+def test_build_env_vars_test_artifact_absent_when_not_set():
+    ctx = make_ctx(config=make_config(test_artifact=None))
+    env = build_env_vars(ctx)
+    assert "TEST_ARTIFACT" not in env
+
+
+def test_build_env_vars_s3_bucket_never_present():
+    ctx = make_ctx(config=make_config(test_artifact="/b/k.tgz", s3_endpoint="https://s3"))
+    env = build_env_vars(ctx)
+    assert "S3_BUCKET" not in env
+
+
+# ---------------------------------------------------------------------------
+# build_podman_command: volume mounts (017-s3-tgz-source, T009 / T014)
+# ---------------------------------------------------------------------------
+
+def _cmd_volumes(ctx):
+    """Return only the --volume values from build_podman_command output."""
+    cmd = build_podman_command(ctx, "podman", {})
+    volumes = []
+    for i, token in enumerate(cmd):
+        if token == "--volume" and i + 1 < len(cmd):
+            volumes.append(cmd[i + 1])
+    return volumes
+
+
+def test_podman_s3_mounts_testscripts_cache():
+    ctx = make_ctx(config=make_config(
+        test_source="s3",
+        test_artifact="/mybucket/checks/login.tgz",
+        testscripts_cache="/omd/var/tmp/tscache",
+    ))
+    volumes = _cmd_volumes(ctx)
+    assert any(":/home/pwuser/testscripts-cache:rw,z" in v for v in volumes)
+
+
+def test_podman_s3_no_tests_mount():
+    ctx = make_ctx(config=make_config(
+        test_source="s3",
+        test_artifact="/mybucket/checks/login.tgz",
+        testscripts_cache="/omd/var/tmp/tscache",
+    ))
+    volumes = _cmd_volumes(ctx)
+    # :/home/pwuser/tests: with colon suffix ensures we don't match testscripts-cache
+    assert not any(":/home/pwuser/tests:" in v for v in volumes)
+
+
+def test_podman_local_tgz_mounts_input_artifact():
+    ctx = make_ctx(config=make_config(
+        test_source="local",
+        test_artifact="/omd/etc/mytests.tgz",
+    ))
+    volumes = _cmd_volumes(ctx)
+    assert any(":/home/pwuser/input-artifact.tgz:ro,z" in v for v in volumes)
+    assert not any(":/home/pwuser/tests:" in v for v in volumes)
+
+
+def test_podman_local_dir_mounts_tests():
+    ctx = make_ctx(config=make_config(
+        test_source="local",
+        test_artifact="/omd/etc/mytests/",
+    ))
+    volumes = _cmd_volumes(ctx)
+    assert any(":/home/pwuser/tests:ro,z" in v for v in volumes)
+    assert not any("input-artifact" in v for v in volumes)
+
+
+def test_podman_local_deprecated_test_dir_mounts_tests():
+    ctx = make_ctx(config=make_config(
+        test_source="local",
+        test_dir="/omd/etc/mylegacytests",
+    ))
+    volumes = _cmd_volumes(ctx)
+    assert any(":/home/pwuser/tests:ro,z" in v for v in volumes)

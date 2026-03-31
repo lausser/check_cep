@@ -130,7 +130,7 @@ def cep_image():
         shutil.copytree(skills_src, skills_dst, symlinks=False)
     try:
         subprocess.run(
-            ["podman", "build", "-t", image, str(_CONTAINER_DIR)],
+            ["podman", "build", "--target", "base", "-t", image, str(_CONTAINER_DIR)],
             check=True,
         )
     finally:

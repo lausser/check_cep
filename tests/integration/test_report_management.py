@@ -16,8 +16,6 @@ import time
 from pathlib import Path
 from unittest.mock import patch
 
-import pytest
-
 from conftest import run_check_cep
 
 
@@ -202,19 +200,3 @@ def test_retention_without_t_emits_warning(tmp_path, write_playwright_config, om
     assert code == 0, f"Expected OK (exit 0), got {code}.\nOutput:\n{output}"
     assert "WARNING: --report-retention has no effect without %t in --result-dir" in output
 
-
-# ---------------------------------------------------------------------------
-# US3: Timeout-aware cleanup
-# ---------------------------------------------------------------------------
-
-def test_cleanup_respects_timeout(tmp_path, write_playwright_config, omd_env):
-    """Cleanup stops gracefully when near the timeout deadline.
-
-    This test patches time.time() inside check_cep to simulate a near-deadline
-    condition. It verifies that not all candidates are deleted and that no
-    partial deletion leaves a corrupted directory.
-    """
-    pytest.skip(
-        "Timeout simulation requires in-process patching; "
-        "use the unit test test_run_cleanup_stops_mid_loop for this coverage."
-    )

@@ -6,6 +6,65 @@ available in the next container image build.
 
 ---
 
+## Spec 017 — S3 Source: Explicit TGZ Artifact Input
+
+**Branch**: `017-s3-tgz-source`
+
+### Summary
+
+Replaced the implicit `{test_name}/scripts.tgz` S3 key derivation with an
+explicit `--test-artifact` parameter. The artifact value encodes both bucket
+and key for S3 sources (`/bucket/path/to/tests.tgz`) and accepts a local
+directory or `.tgz`/`.tar.gz` file for local sources.
+
+### Breaking change — `--s3-bucket` removed
+
+The `--s3-bucket` CLI argument and the `S3_BUCKET` container environment
+variable are **removed**. The bucket name is now the first path segment of
+`--test-artifact`. Update existing S3 check commands:
+
+```
+# Before
+--test-source s3 --s3-bucket mybucket
+
+# After
+--test-source s3 --test-artifact /mybucket/path/to/tests.tgz
+```
+
+### New parameter — `--test-artifact`
+
+| `--test-source` | `--test-artifact` value | Behaviour |
+|-----------------|------------------------|-----------|
+| `s3` | `/bucket/key/tests.tgz` | Downloaded from S3, cached in `testscripts-cache/`, extracted to container |
+| `local` | `/path/to/tests.tgz` | Mounted at fixed container path, extracted inside container |
+| `local` | `/path/to/tests/` | Directory mounted directly at `/home/pwuser/tests` |
+
+### New container environment variable — `TEST_ARTIFACT`
+
+The value of `--test-artifact` is forwarded into the container as
+`TEST_ARTIFACT`. Source plugins use it to locate and acquire test scripts.
+
+### Deprecation — `--test-dir`
+
+`--test-dir` continues to work for `--test-source=local` directory mounts
+but now emits a deprecation warning to stderr. Use `--test-artifact` instead.
+Supplying both `--test-dir` and `--test-artifact` is an error.
+
+### S3 cache layout
+
+Cache entries now mirror the full artifact path under `testscripts-cache/`:
+
+```
+testscripts-cache/
+└── mybucket/
+    └── path/
+        └── tests.tgz
+```
+
+Freshness is checked via S3 `HeadObject` (mtime + size comparison).
+
+---
+
 ## Spec 014 — AI Agent Skill Files
 
 **Branch**: `014-ai-agent-skills`

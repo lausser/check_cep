@@ -1,33 +1,19 @@
-"""Unit tests for LocalCleanup and parse_retention (T021 — 009-report-management)."""
-import importlib.machinery
-import importlib.util
+"""Unit tests for LocalCleanup and parse_retention (009-report-management)."""
 import json
 import os
-import sys
 import time
-from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 
-# ---------------------------------------------------------------------------
-# Load the check_cep module directly (no package install required)
-# ---------------------------------------------------------------------------
-
-_PLUGIN = Path(__file__).parent.parent.parent / "src" / "check_cep"
-_loader = importlib.machinery.SourceFileLoader("check_cep_mod", str(_PLUGIN))
-_spec = importlib.util.spec_from_file_location("check_cep_mod", str(_PLUGIN), loader=_loader)
-_mod = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(_mod)
-# Register so unittest.mock.patch can resolve "check_cep_mod.time.time"
-sys.modules.setdefault("check_cep_mod", _mod)
-
-LocalCleanup = _mod.LocalCleanup
-CleanupResult = _mod.CleanupResult
-parse_retention = _mod.parse_retention
-run_cleanup = _mod.run_cleanup
-
-from tests.unit.test_run_context import make_ctx, make_config  # noqa: E402
+from conftest import (
+    LocalCleanup,
+    CleanupResult,
+    parse_retention,
+    run_cleanup,
+    make_config,
+    make_ctx,
+)
 
 
 # ---------------------------------------------------------------------------

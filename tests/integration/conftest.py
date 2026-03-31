@@ -136,7 +136,7 @@ def container_cleanup():
 # ---------------------------------------------------------------------------
 
 
-def run_check_cep(test_dir, result_dir, extra_args=None, env=None, proc_timeout=180, spectate=None):
+def run_check_cep(test_dir=None, result_dir=None, extra_args=None, env=None, proc_timeout=180, spectate=None):
     """Run check_cep as a subprocess and return (combined_output, returncode).
 
     combined_output is stdout + stderr joined for easy assertion.
@@ -163,11 +163,11 @@ def run_check_cep(test_dir, result_dir, extra_args=None, env=None, proc_timeout=
         "local",
         "--result-dest",
         "local",
-        "--test-dir",
-        str(test_dir),
-        "--result-dir",
-        str(result_dir),
     ]
+    if test_dir is not None:
+        cmd.extend(["--test-dir", str(test_dir)])
+    if result_dir is not None:
+        cmd.extend(["--result-dir", str(result_dir)])
     if extra_args:
         cmd.extend(extra_args)
 
@@ -262,14 +262,15 @@ def run_check_cep_s3(
     if not (stage / "playwright.config.ts").exists():
         write_playwright_config(stage)
 
-    # Pack as flat scripts.tgz (no leading directory)
-    tgz_path = tmp_path / "scripts.tgz"
+    # Pack as flat tests.tgz (no leading directory)
+    tgz_path = tmp_path / "tests.tgz"
     with tarfile.open(str(tgz_path), "w:gz") as tar:
         tar.add(str(stage), arcname=".")
 
-    # Upload to MinIO
-    s3_key = f"{testident}/scripts.tgz"
+    # Upload to MinIO — artifact path: /cep-tests/{testident}/tests.tgz
+    s3_key = f"{testident}/tests.tgz"
     s3_client.upload_file(str(tgz_path), "cep-tests", s3_key)
+    test_artifact = f"/cep-tests/{s3_key}"
 
     # Prepare host-side dirs
     cache_dir = tmp_path / "cache"
@@ -293,8 +294,8 @@ def run_check_cep_s3(
         "minioadmin",
         "--aws-secret-access-key",
         "minioadmin",
-        "--s3-bucket",
-        "cep-tests",
+        "--test-artifact",
+        test_artifact,
         "--s3-report-bucket",
         "cep-reports",
         "--s3-report-path",
@@ -307,12 +308,11 @@ def run_check_cep_s3(
     if extra_args:
         cmd_extra.extend(extra_args)
 
-    # run_check_cep hardcodes some args; extra_args override them because
-    # argparse uses the last occurrence for store actions.
-    # test_dir is not used in S3 mode (no local test mount), so tmp_path is fine.
+    # S3 mode does not mount a local test dir; skip --test-dir entirely.
+    # Extra args override base args (argparse uses last occurrence for store).
     output, code = run_check_cep(
-        test_dir=tmp_path,
-        result_dir=tmp_path,
+        test_dir=None,
+        result_dir=None,
         extra_args=cmd_extra,
         env=omd_env,
         proc_timeout=proc_timeout,

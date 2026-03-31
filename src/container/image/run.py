@@ -19,6 +19,14 @@ from typing import Protocol, runtime_checkable
 
 logger = logging.getLogger("run.py")
 
+# Make container-side plugins importable at module level (run.py is the entry
+# point in the container; plugins/ is a sibling directory).
+_PLUGINS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "plugins")
+if _PLUGINS_DIR not in sys.path:
+    sys.path.insert(0, _PLUGINS_DIR)
+
+from _shared import SKIP_DIRS as _SKIP_DIRS
+
 
 # ---------------------------------------------------------------------------
 # Plugin Protocols
@@ -109,14 +117,11 @@ def write_test_meta(results_path: str, hostname: str, servicedescription: str,
 def find_test_subdir(test_dir: str) -> str:
     """Walk test_dir and return the directory containing the first *.test.ts file.
 
-    Skips 'functions', 'variables', and 'node_modules' directories — these are
-    shared-utility folders that never hold test entry points.
-
-    Raises RuntimeError if no *.test.ts file is found.
+    Skips directories in SKIP_DIRS (shared-utility folders that never hold
+    test entry points).  Raises RuntimeError if no *.test.ts file is found.
     """
-    skip = {"functions", "variables", "node_modules"}
     for root, dirs, files in os.walk(test_dir):
-        dirs[:] = [d for d in dirs if d not in skip]
+        dirs[:] = [d for d in dirs if d not in _SKIP_DIRS]
         for fname in files:
             if fname.endswith(".test.ts") or fname.endswith(".test.js"):
                 logger.debug(f"Found test file: {os.path.join(root, fname)}")

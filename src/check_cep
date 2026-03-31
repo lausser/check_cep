@@ -148,7 +148,7 @@ def truncate_playwright_diff(msg: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Nagios output formatting (T006)
+# Nagios output formatting
 # ---------------------------------------------------------------------------
 
 def camelcase(label: str) -> str:
@@ -193,7 +193,7 @@ def nagios_exit(status: str, message: str, perfdata_str: str = "", long_output: 
 
 
 # ---------------------------------------------------------------------------
-# Run context (010-run-context)
+# Run configuration and context
 # ---------------------------------------------------------------------------
 
 @dataclass(frozen=True)
@@ -216,7 +216,8 @@ class RunConfig:
     logging: str
 
     # Paths (templates — not yet expanded)
-    test_dir: str
+    test_dir: Optional[str]
+    test_artifact: Optional[str]
     result_dir: str
     testscripts_cache: str
 
@@ -248,7 +249,6 @@ class RunConfig:
     s3_endpoint: Optional[str]
     aws_access_key_id: Optional[str]
     aws_secret_access_key: Optional[str]
-    s3_bucket: Optional[str]
     s3_report_bucket: Optional[str]
     s3_report_path: Optional[str]
     s3_report_url: Optional[str]
@@ -293,7 +293,7 @@ class RunContext:
 
 
 # ---------------------------------------------------------------------------
-# TESTNAME derivation and path template resolution (T005)
+# Test name derivation and path template resolution
 # ---------------------------------------------------------------------------
 
 def derive_testname(hostname: str, servicedescription: str) -> str:
@@ -325,7 +325,7 @@ def sanitize_container_name(testname: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# PID file concurrency control (T015)
+# PID file concurrency control
 # ---------------------------------------------------------------------------
 
 def is_process_running(pid: int) -> bool:
@@ -370,7 +370,7 @@ def remove_pid_file(pid_file_path: str) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Container cleanup (T016)
+# Container lifecycle helpers
 # ---------------------------------------------------------------------------
 
 def container_cleanup(container_bin: str, container_name: str) -> None:
@@ -455,7 +455,7 @@ def setup_x11_access() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Report cleanup (009-report-management)
+# Report retention and cleanup
 # ---------------------------------------------------------------------------
 
 @dataclass
@@ -562,7 +562,7 @@ def run_cleanup(plugin: ReportCleanupPlugin, ctx: RunContext) -> CleanupResult:
 
 
 # ---------------------------------------------------------------------------
-# Container environment variable assembly (T007)
+# Container environment variable assembly
 # ---------------------------------------------------------------------------
 
 def build_env_vars(ctx: RunContext) -> Dict[str, str]:
@@ -602,8 +602,8 @@ def build_env_vars(ctx: RunContext) -> Dict[str, str]:
         env["AWS_ACCESS_KEY_ID"] = ctx.config.aws_access_key_id
     if ctx.config.aws_secret_access_key:
         env["AWS_SECRET_ACCESS_KEY"] = ctx.config.aws_secret_access_key
-    if ctx.config.s3_bucket:
-        env["S3_BUCKET"] = ctx.config.s3_bucket
+    if ctx.config.test_artifact:
+        env["TEST_ARTIFACT"] = ctx.config.test_artifact
     if ctx.config.s3_report_bucket:
         env["S3_REPORT_BUCKET"] = ctx.config.s3_report_bucket
     if ctx.config.s3_report_path:
@@ -627,7 +627,7 @@ def build_env_vars(ctx: RunContext) -> Dict[str, str]:
 
 
 # ---------------------------------------------------------------------------
-# Podman command building (T008)
+# Podman command construction
 # ---------------------------------------------------------------------------
 
 def build_podman_command(ctx: RunContext, container_bin: str,
@@ -658,11 +658,20 @@ def build_podman_command(ctx: RunContext, container_bin: str,
         cmd.extend(["--env", f"{key}={value}"])
 
     # Conditional volume mounts
-    test_dir = resolve_path_template(ctx.config.test_dir, ctx.hostname,
-                                     ctx.servicedescription, ctx.started_str)
-
     if ctx.config.test_source == "local":
-        cmd.extend(["--volume", f"{os.path.abspath(test_dir)}:/home/pwuser/tests:ro,z"])
+        if ctx.config.test_artifact:
+            local_path = ctx.config.test_artifact
+        else:
+            # Deprecated --test-dir or implicit OMD default
+            raw_dir = ctx.config.test_dir or (ctx.omd_root + "/etc/check_cep/tests/%h/%s")
+            local_path = resolve_path_template(raw_dir, ctx.hostname,
+                                               ctx.servicedescription, ctx.started_str)
+        if local_path.endswith(".tgz") or local_path.endswith(".tar.gz"):
+            cmd.extend(["--volume",
+                        f"{os.path.abspath(local_path)}:/home/pwuser/input-artifact.tgz:ro,z"])
+        else:
+            cmd.extend(["--volume",
+                        f"{os.path.abspath(local_path)}:/home/pwuser/tests:ro,z"])
     cmd.extend(["--volume", f"{os.path.abspath(ctx.result_dir)}:/home/pwuser/results:rw,z"])
     if ctx.config.test_source == "s3":
         cache_dir = ctx.config.testscripts_cache
@@ -723,7 +732,7 @@ def build_podman_command(ctx: RunContext, container_bin: str,
 
 
 # ---------------------------------------------------------------------------
-# Container execution (T017)
+# Container execution
 # ---------------------------------------------------------------------------
 
 def execute_container(cmd: List[str], shell_mode: bool = False) -> Tuple[bytes, bytes, int]:
@@ -740,7 +749,7 @@ def execute_container(cmd: List[str], shell_mode: bool = False) -> Tuple[bytes, 
 
 
 # ---------------------------------------------------------------------------
-# Registry auth retry (T018)
+# Registry authentication retry
 # ---------------------------------------------------------------------------
 
 def retry_with_auth(container_bin: str, cmd: List[str], image: str,
@@ -764,7 +773,7 @@ def retry_with_auth(container_bin: str, cmd: List[str], image: str,
 
 
 # ---------------------------------------------------------------------------
-# steps.json parsing (T019)
+# Results parsing (steps.json)
 # ---------------------------------------------------------------------------
 
 def parse_steps_json(json_path: str) -> Optional[dict]:
@@ -955,7 +964,7 @@ def normalize_perfdata_labels(perfdata: List[Dict[str, Any]]) -> List[Dict[str, 
 
 
 # ---------------------------------------------------------------------------
-# Exit code determination (T020)
+# Container output analysis
 # ---------------------------------------------------------------------------
 
 def check_timeout(stdout: str, stderr: str) -> bool:
@@ -986,7 +995,7 @@ def check_duplicate_container(stderr: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Report URL template resolution (T023)
+# Report URL template resolution
 # ---------------------------------------------------------------------------
 
 def resolve_report_url(ctx: RunContext, timestamp: str) -> str:
@@ -1002,7 +1011,7 @@ def resolve_report_url(ctx: RunContext, timestamp: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# CgroupPoller (T027-T031)
+# Cgroup resource monitoring
 # ---------------------------------------------------------------------------
 
 class CgroupPoller:
@@ -1283,9 +1292,12 @@ def build_argument_parser() -> ArgumentParser:
 
     # Path arguments
     omd_root = os.environ.get("OMD_ROOT", "")
-    parser.add_argument("--test-dir", dest="test_dir",
-                        default=omd_root + "/etc/check_cep/tests/%h/%s",
-                        help="Host-side test scripts directory (supports %%h, %%s)")
+    parser.add_argument("--test-artifact", dest="test_artifact", default=None,
+                        help="Test script artifact: /bucket/key/tests.tgz (S3) or "
+                             "local directory / .tgz file path")
+    parser.add_argument("--test-dir", dest="test_dir", default=None,
+                        help="DEPRECATED: use --test-artifact instead. "
+                             "Host-side test scripts directory (supports %%h, %%s)")
     parser.add_argument("--result-dir", dest="result_dir",
                         default=omd_root + "/var/tmp/check_cep/%h/%s",
                         help="Host-side results directory (supports %%h, %%s, %%t for per-run timestamped dirs)")
@@ -1332,7 +1344,6 @@ def build_argument_parser() -> ArgumentParser:
     parser.add_argument("--s3-endpoint", dest="s3_endpoint", default=None)
     parser.add_argument("--aws-access-key-id", dest="aws_access_key_id", default=None)
     parser.add_argument("--aws-secret-access-key", dest="aws_secret_access_key", default=None)
-    parser.add_argument("--s3-bucket", dest="s3_bucket", default=None)
     parser.add_argument("--s3-report-bucket", dest="s3_report_bucket", default=None)
     parser.add_argument("--s3-report-path", dest="s3_report_path", default=None)
     parser.add_argument("--s3-report-url", dest="s3_report_url", default=None)
@@ -1371,6 +1382,7 @@ def main() -> int:
         result_dest=args.result_dest,
         logging=args.logging,
         test_dir=args.test_dir,
+        test_artifact=args.test_artifact,
         result_dir=args.result_dir,
         testscripts_cache=args.testscripts_cache,
         report_retention=args.report_retention,
@@ -1388,7 +1400,6 @@ def main() -> int:
         s3_endpoint=args.s3_endpoint,
         aws_access_key_id=args.aws_access_key_id,
         aws_secret_access_key=args.aws_secret_access_key,
-        s3_bucket=args.s3_bucket,
         s3_report_bucket=args.s3_report_bucket,
         s3_report_path=args.s3_report_path,
         s3_report_url=args.s3_report_url,
@@ -1449,6 +1460,44 @@ def main() -> int:
             setup_x11_access()
 
     # ---------------------------------------------------------------------------
+    # Test artifact / test-dir validation (017-s3-tgz-source)
+    # ---------------------------------------------------------------------------
+    if config.test_dir is not None and config.test_artifact is not None:
+        return nagios_exit("UNKNOWN",
+                           "--test-dir and --test-artifact are mutually exclusive; "
+                           "use --test-artifact only")
+    if config.test_dir is not None:
+        print("WARNING: --test-dir is deprecated, use --test-artifact instead",
+              file=sys.stderr)
+    if config.test_source == "s3":
+        if not config.test_artifact:
+            return nagios_exit("UNKNOWN",
+                               "--test-artifact is required when --test-source=s3 "
+                               "(e.g. --test-artifact=/bucket/path/tests.tgz)")
+        if not (config.test_artifact.endswith(".tgz")
+                or config.test_artifact.endswith(".tar.gz")):
+            return nagios_exit("UNKNOWN",
+                               "--test-artifact must end with .tgz or .tar.gz "
+                               f"(got: {config.test_artifact})")
+        if not config.s3_endpoint:
+            return nagios_exit("UNKNOWN",
+                               "--s3-endpoint is required when --test-source=s3")
+        if not config.aws_access_key_id:
+            return nagios_exit("UNKNOWN",
+                               "--aws-access-key-id is required when --test-source=s3")
+        if not config.aws_secret_access_key:
+            return nagios_exit("UNKNOWN",
+                               "--aws-secret-access-key is required when --test-source=s3")
+    if config.test_source == "local" and config.test_artifact:
+        if (not os.path.isdir(config.test_artifact)
+                and not config.test_artifact.endswith(".tgz")
+                and not config.test_artifact.endswith(".tar.gz")):
+            return nagios_exit("UNKNOWN",
+                               "--test-artifact with --test-source=local must be a directory "
+                               "or end with .tgz/.tar.gz "
+                               f"(got: {config.test_artifact})")
+
+    # ---------------------------------------------------------------------------
     # Build run context (010-run-context)
     # ---------------------------------------------------------------------------
     _testname = derive_testname(config.host_name, config.service_description)
@@ -1473,7 +1522,7 @@ def main() -> int:
     logger.debug("RunContext: %s", ctx)
 
     # ---------------------------------------------------------------------------
-    # PID file concurrency check (T015)
+    # PID file concurrency check
     # ---------------------------------------------------------------------------
     os.makedirs(ctx.result_dir, mode=PERM_WORLD_RWX, exist_ok=True)
     os.chmod(ctx.result_dir, PERM_WORLD_RWX)
@@ -1514,7 +1563,7 @@ def main() -> int:
     write_pid_file(ctx.pid_file)
 
     # ---------------------------------------------------------------------------
-    # Container cleanup (T016)
+    # Container lifecycle helpers
     # ---------------------------------------------------------------------------
     container_cleanup(containerenv.container_bin, ctx.container_name)
 
@@ -1566,6 +1615,10 @@ def main() -> int:
     # ---------------------------------------------------------------------------
     stdout_str = sanitize_output(stdout)
     stderr_str = sanitize_output(stderr)
+
+    # Forward container stderr in debug mode so plugin/source debug logs are visible
+    if ctx.config.debug and stderr_str:
+        print(stderr_str, file=sys.stderr)
 
     # ---------------------------------------------------------------------------
     # Parse steps.json (T019)
@@ -1634,14 +1687,14 @@ def main() -> int:
     perfdata_str = format_perfdata(perfdata)
 
     # ---------------------------------------------------------------------------
-    # Exit code determination chain (T020)
+    # Exit code determination
     # ---------------------------------------------------------------------------
     timed_out = check_timeout(stdout_str, stderr_str)
     s3_failed = check_s3_upload_failure(stdout_str, stderr_str)
     duplicate = check_duplicate_container(stderr_str)
 
     # ---------------------------------------------------------------------------
-    # Report cleanup (US2, US3 — 009-report-management)
+    # Report retention cleanup
     # ---------------------------------------------------------------------------
     if ctx.config.report_retention is not None and "%t" in ctx.config.result_dir:
         cleanup_plugin = LocalCleanup()
