@@ -6,6 +6,79 @@ available in the next container image build.
 
 ---
 
+## Spec 018 — Lightpanda 0.3.4 Upgrade & Broader Test Coverage
+
+**Branch**: `018-lightpanda-034-upgrade`
+
+### Summary
+
+Bumped the pinned native Lightpanda browser binary from `v0.2.6` to `0.3.4`
+(`ARG LIGHTPANDA_BROWSER_VERSION` in `src/container/Dockerfile`) and expanded
+the Lightpanda integration lane to cover the check kinds the newer engine can
+now run reliably.
+
+### Playwright bumped v1.58.2 → v1.60.0
+
+Aligned the container's Playwright with the version the official
+`lightpanda-io/demo` runs (`~1.60.0`): base image `mcr.microsoft.com/playwright:
+v1.60.0-noble` (Makefile `PLAYWRIGHT_VERSION` + Dockerfile ARG) and
+`@playwright/test` in `src/container/package.json`/`package-lock.json`. No
+breaking 1.59/1.60 change affects this project (the removed `connectOverCDP`
+`logger` option isn't used; no `videosPath`/`videoSize`/`ariaRef`/`exposeBinding`
+/`junit` usage). Full integration suite unchanged (22 passed). Note: the bump
+does **not** unlock Lightpanda interaction on heavy pages — the click hang below
+persists on 1.60, confirming it is a Lightpanda actionability limit, not a
+Playwright-client version issue.
+
+### Version pin — mind the tag scheme
+
+The `0.3.x` releases dropped the `v` prefix used by the `0.2.x` line. The pin
+is `0.3.4` (**not** `v0.3.4`, which 404s); the download-URL template is
+unchanged. The build hard-fails via `curl -f` if the asset is missing, so the
+pin stays reproducible.
+
+### Expanded Lightpanda lane
+
+`FIXTURES_LIGHTPANDA` in `tests/integration/test_modes.py` grew from 2 to 4
+fixtures. Promoted (same Nagios verdict as Chromium, verified empirically):
+
+- `tc_fail` — failing-assertion path → `CRITICAL -`
+- `tc_timeout` — timeout guardrail → `CRITICAL - ... timed out` within its limit
+
+### Upgrade canary (`tc_pass_canary`)
+
+`tc_pass` additionally runs in the Lightpanda lane as a **strict xfail canary**
+with Chromium-lane expectations (`OK -`, exit 0). It is a *broad* interaction
+canary: `tc_pass` trips on the first unsupported interaction — a number-input
+`fill()` that raises `InvalidStateError` (~20s → `CRITICAL` → XFAIL, suite stays
+green) — and never reaches its click. An XPASS therefore requires the engine to
+broadly support interaction (number/date `fill()` **and** click actionability
+**and** value read-back), not a single fix. When a future Lightpanda pin bump
+makes it pass, `strict=True` turns the XPASS into a loud suite failure — the
+automatic signal to re-review which fixtures can be promoted, replacing manual
+per-upgrade probing. The interaction limits are architectural (no CSS layout
+engine, so Playwright's click actionability hit test cannot converge on
+CSS-framework pages); analysis and rejected alternatives (e.g. `force: true` —
+would weaken the user-fidelity guarantee) are documented in the spec folder
+(`dual-engine-assessment.md`, research item R6).
+
+### Capability boundary (verified on 0.3.4, cross-checked vs. changelog + demo)
+
+Genuinely improved: text/password `fill()` now writes the DOM value, and
+`locator.click()` works on **simple/static pages** (an `example.com` link-click
+navigates, matching the official `lightpanda-io/demo`). Still limited: click
+**hangs on complex / JS-heavy app pages** — on `practice.expandtesting.com` the
+element is found but Playwright's click actionability never completes → timeout,
+so multi-field forms (`tc_pass`) and multi-page flows (`tc_register_pass`), which
+target that heavy site, remain Chromium-only. Also: `fill()` on
+`<input type=number|date>` throws `InvalidStateError`; `getByText()`/`toHaveValue()`
+matchers are unreliable on some pages. Vision fixtures stay permanently
+Chromium-only (no rendering engine). No check was weakened to pass on Lightpanda;
+unsupported interactions return a clear `CRITICAL` within their time limit (no
+hang).
+
+---
+
 ## Spec 017 — S3 Source: Explicit TGZ Artifact Input
 
 **Branch**: `017-s3-tgz-source`

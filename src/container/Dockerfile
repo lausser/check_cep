@@ -1,8 +1,8 @@
-ARG PLAYWRIGHT_VERSION=v1.58.2
+ARG PLAYWRIGHT_VERSION=v1.60.0
 FROM mcr.microsoft.com/playwright:${PLAYWRIGHT_VERSION}-noble AS base
 
 # Re-declare ARG after FROM
-ARG PLAYWRIGHT_VERSION=v1.58.2
+ARG PLAYWRIGHT_VERSION=v1.60.0
 ENV PLAYWRIGHT_VERSION=${PLAYWRIGHT_VERSION} \
     DEBIAN_FRONTEND="noninteractive" \
     TZ="UTC"
@@ -33,7 +33,9 @@ WORKDIR /home/pwuser
 # - `@lightpanda/browser` is an npm package published from the separate
 #   `lightpanda-io/node-packages` repository. Its published versions are 1.x.
 # - The native Lightpanda browser binary is released from
-#   `lightpanda-io/browser` and currently uses v0.2.x tags.
+#   `lightpanda-io/browser`. NOTE the release-tag scheme changed: the old
+#   0.2.x line was tagged `v0.2.x` (with a `v`), but the 0.3.x releases dropped
+#   the prefix and are tagged plain `0.3.x` (`v0.3.4` 404s). Pin without the `v`.
 # - These are different version streams and must not be assumed to match.
 # - To keep the container reproducible, we pin BOTH:
 #   - the npm wrapper package via package.json/package-lock.json
@@ -41,7 +43,7 @@ WORKDIR /home/pwuser
 # - We also point LIGHTPANDA_EXECUTABLE_PATH at the final stable install path
 #   before `npm ci` so the package postinstall does not download a moving
 #   nightly binary into ~/.cache and accidentally override the pin.
-ARG LIGHTPANDA_BROWSER_VERSION=v0.2.6
+ARG LIGHTPANDA_BROWSER_VERSION=0.3.4
 ENV LIGHTPANDA_DISABLE_TELEMETRY=true \
     LIGHTPANDA_EXECUTABLE_PATH=/usr/local/bin/lightpanda
 

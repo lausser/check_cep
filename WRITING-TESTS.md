@@ -1063,10 +1063,15 @@ pure Playwright locators.
 > execution than Chromium for DOM-only workloads.  CDP compatibility is
 > still incomplete, so it only works for really simple web pages today.
 > If it doesn't work for your test, use Chromium (the default).
+>
+> The container ships Lightpanda **0.3.4** (native binary, pinned in
+> `src/container/Dockerfile`).
 
 ### What Works
 
-Single navigation + read-only DOM queries:
+Single navigation + read-only DOM queries, and the failure/timeout verdict
+paths (a failing assertion or a timeout produces the same Nagios verdict as
+Chromium):
 
 ```typescript
 test('simple page check', async ({ page }) => {
@@ -1076,14 +1081,51 @@ test('simple page check', async ({ page }) => {
 });
 ```
 
-### What Does NOT Work
+Integration coverage (see `FIXTURES_LIGHTPANDA` in
+`tests/integration/test_modes.py`): a passing read-only check (`tc_lp_pass`),
+a syntax-error check (`tc_syntax`), a failing-assertion check (`tc_fail`), and
+a timeout check (`tc_timeout` → `CRITICAL - ... timed out` within its limit).
 
-- `page.goto()` a second time (crashes the CDP server)
-- `page.locator(sel).fill(text)` (crashes)
-- `page.locator(sel).click()` when it triggers navigation (crashes)
-- Complex or JS-heavy sites (segfault during load)
-- Vision matching (no rendering engine)
+### What Now Works on 0.3.4 (that didn't before)
+
+- **Text input fills.** `page.locator('#text').fill('hello')` writes the DOM
+  value on 0.3.4 (confirmed via `page.evaluate`) — the old 0.2.6 "`fill()`
+  crashes" note is obsolete for text/password fields.
+- **Clicks work on simple/static pages.** A plain `locator.click()` that
+  navigates works on a lightweight page — e.g. clicking the link on
+  `example.com` navigates. This matches the official `lightpanda-io/demo`, whose
+  Playwright example clicks `getByText('Campfire Commerce')` on its own static
+  demo site.
+
+### What Does NOT Work Reliably
+
+Verified against **0.3.4** (spec 018), cross-checked against the Lightpanda
+changelog and demo:
+
+- **`locator.click()` HANGS on complex / JS-heavy pages.** On a real app page
+  (e.g. `practice.expandtesting.com`) the element is *found* (count = 1) but
+  Playwright's click actionability handshake never completes and the action
+  times out. Simple pages click fine; heavy framework pages do not — this is why
+  `tc_pass` and `tc_register_pass` stay Chromium-only. If your interactive check
+  targets a heavy web app, keep it on Chromium.
+- `page.locator(sel).fill(text)` on `<input type=number>` / `<input type=date>`
+  — throws `InvalidStateError` (text-selection semantics). Plain text/password
+  inputs are fine; these specific field types are not.
+- `getByText(...)` / `expect(locator).toHaveValue(...)` — matcher results are
+  unreliable on some pages (e.g. `getByText('More information')` matched 0 on
+  `example.com` even though the link exists). Prefer CSS/id locators and assert
+  against the page's own visible output.
+- `page.goto()` a second time (multi-page flow)
+- Vision matching (no rendering engine — permanent Chromium-only boundary)
 - Headed mode (headless only)
+
+A check the engine cannot handle still returns a verdict **within its time
+limit** (a clear `CRITICAL`, no indefinite hang), so it never wedges monitoring.
+
+> **Bottom line:** Lightpanda 0.3.4 genuinely improved — text fill and
+> simple-page clicks work — but interactive checks against heavy web apps still
+> hang on click actionability. Use Lightpanda for lightweight/static targets and
+> read-mostly checks; keep heavy-app interaction on Chromium.
 
 ### Running with Lightpanda
 

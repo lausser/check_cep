@@ -118,20 +118,68 @@ def test_local(
 # ---------------------------------------------------------------------------
 # Local mode — Lightpanda browser
 # ---------------------------------------------------------------------------
-# Lightpanda's CDP support is WIP: single navigation + DOM reads work,
-# but fill(), click()-navigation, and second goto() crash the server.
-# We use a dedicated fixture (tc_lp_pass) that stays within these limits.
-
+# Lightpanda 0.3.4 CDP support (verified empirically — spec 018, cross-checked
+# against the browser changelog and the official lightpanda-io/demo). What works:
+# goto() + read-only DOM queries; text/password fill() (the DOM value IS written
+# — confirmed via page.evaluate); locator.click() on SIMPLE/static pages (an
+# example.com link-click navigates on 0.3.4, matching the demo); and the
+# failure/timeout verdict paths (same Nagios output as Chromium).
+#
+# What does NOT work reliably under Playwright's CDP driver — the reason tc_pass
+# and tc_register_pass stay Chromium-only:
+#   - locator.click() HANGS on complex/JS-heavy real pages (e.g.
+#     practice.expandtesting.com): the target element is found (count=1) but
+#     Playwright's actionability handshake never completes → timeout. Simple
+#     static pages click fine; heavy app pages do not.
+#   - fill() on <input type=number|date> throws InvalidStateError (setSelection
+#     semantics), so those field types stay Chromium-only.
+#   - getByText()/toHaveValue() matchers are unreliable on some pages.
+#   - Vision fixtures are permanently Chromium-only (no rendering engine).
+# We keep only fixtures that pass deterministically; interactive checks against
+# heavy target sites remain Chromium-only for now.
+#
+# The click hang is ARCHITECTURAL, not a version bug: Lightpanda has no CSS
+# layout engine — element geometry comes from inline styles/attributes and
+# sibling order against a fixed 1920x1080 viewport, so Playwright's
+# "receives events" hit test (elementFromPoint must return the target) cannot
+# converge on CSS-framework pages. Full analysis:
+# specs/018-lightpanda-034-upgrade/dual-engine-assessment.md (R6).
+#
+# tc_pass runs as a strict-xfail CANARY with Chromium-lane expectations. It is
+# a BROAD interaction canary: tc_pass trips on the first unsupported interaction
+# — a number-input fill() (`#input-number`) that raises InvalidStateError,
+# ~20s → CRITICAL → XFAIL (suite green) — and it never even reaches its click.
+# So an XPASS requires the engine to broadly support interaction (number/date
+# fill AND click actionability AND value read-back), not just one fix. The day a
+# Lightpanda pin bump makes it return OK, strict=True turns the XPASS into a
+# suite failure — the signal to re-review fixture promotion.
 FIXTURES_LIGHTPANDA = [
     ("tc_lp_pass", 0, "OK -", [], None),
     ("tc_syntax", None, None, [], None),
+    ("tc_fail", 2, "CRITICAL -", [], None),
+    ("tc_timeout", 2, "CRITICAL -", ["--timeout", "15"], "timed out"),
+    pytest.param(
+        "tc_pass",
+        0,
+        "OK -",
+        [],
+        None,
+        id="tc_pass_canary",
+        marks=pytest.mark.xfail(
+            strict=True,
+            reason="Lightpanda canary: tc_pass hits an unsupported interaction "
+            "(number-input fill() -> InvalidStateError; heavy-page click also "
+            "hangs). XPASS after a pin bump = engine broadly supports "
+            "interaction; re-review FIXTURES_LIGHTPANDA promotion (spec 018 R6).",
+        ),
+    ),
 ]
 
 
 @pytest.mark.parametrize(
     "fixture_name,expected_exit,expected_prefix,extra_args,keyword",
     FIXTURES_LIGHTPANDA,
-    ids=[f[0] for f in FIXTURES_LIGHTPANDA],
+    ids=[getattr(f, "id", None) or f[0] for f in FIXTURES_LIGHTPANDA],
 )
 def test_local_lightpanda(
     tmp_path,
@@ -185,18 +233,19 @@ def test_local_lightpanda(
     if keyword:
         assert keyword in output, f"[{fixture_name}/lightpanda] Expected '{keyword}' in output.\nOutput:\n{output}"
 
-    # Result artefacts
-    steps_json = result_dir / "steps.json"
-    assert steps_json.exists(), f"[{fixture_name}/lightpanda] steps.json not written"
-    data = json.loads(steps_json.read_text())
-    assert isinstance(data, dict), f"[{fixture_name}/lightpanda] steps.json is not a JSON object"
+    # Result artefacts — only for tests that complete (not tc_timeout which is killed)
+    if fixture_name != "tc_timeout":
+        steps_json = result_dir / "steps.json"
+        assert steps_json.exists(), f"[{fixture_name}/lightpanda] steps.json not written"
+        data = json.loads(steps_json.read_text())
+        assert isinstance(data, dict), f"[{fixture_name}/lightpanda] steps.json is not a JSON object"
 
-    meta_json = result_dir / "test-meta.json"
-    assert meta_json.exists(), f"[{fixture_name}/lightpanda] test-meta.json not written"
-    meta = json.loads(meta_json.read_text())
-    assert meta["hostname"] == "testhost"
-    assert meta["servicedescription"] == fixture_name
-    assert "status" in meta
+        meta_json = result_dir / "test-meta.json"
+        assert meta_json.exists(), f"[{fixture_name}/lightpanda] test-meta.json not written"
+        meta = json.loads(meta_json.read_text())
+        assert meta["hostname"] == "testhost"
+        assert meta["servicedescription"] == fixture_name
+        assert "status" in meta
 
 
 # ---------------------------------------------------------------------------

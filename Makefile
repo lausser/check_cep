@@ -1,6 +1,6 @@
 .PHONY: help image test-image image-ai test-image-ai test-local test-all test-clean teaser package-lock _copy-skills
 
-PLAYWRIGHT_VERSION ?= v1.58.2
+PLAYWRIGHT_VERSION ?= v1.60.0
 
 help:
 	@echo "Available targets:"
