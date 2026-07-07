@@ -1,6 +1,7 @@
 .PHONY: help image test-image image-ai test-image-ai test-local test-all test-clean teaser package-lock _copy-skills
 
 PLAYWRIGHT_VERSION ?= v1.60.0
+GEMINI_CLI_VERSION ?= 0.49.0
 
 help:
 	@echo "Available targets:"
@@ -15,6 +16,7 @@ help:
 	@echo "  package-lock                      Regenerate src/container/package-lock.json from package.json"
 	@echo ""
 	@echo "Override Playwright version: make image PLAYWRIGHT_VERSION=v1.60.0"
+	@echo "Override Gemini CLI version: make image-ai GEMINI_CLI_VERSION=0.49.0"
 
 image:
 	podman build \
@@ -34,6 +36,7 @@ test-image:
 image-ai: _copy-skills
 	podman build \
 		--build-arg PLAYWRIGHT_VERSION=$(PLAYWRIGHT_VERSION) \
+		--build-arg GEMINI_CLI_VERSION=$(GEMINI_CLI_VERSION) \
 		-t localhost/check_cep:ai-$(PLAYWRIGHT_VERSION) \
 		-t localhost/check_cep:ai-latest \
 		src/container/; \
@@ -42,6 +45,7 @@ image-ai: _copy-skills
 test-image-ai: _copy-skills
 	podman build \
 		--build-arg PLAYWRIGHT_VERSION=$(PLAYWRIGHT_VERSION) \
+		--build-arg GEMINI_CLI_VERSION=$(GEMINI_CLI_VERSION) \
 		-t check_cep:test-ai \
 		src/container/; \
 	ret=$$?; rm -rf src/container/.agents-skills; exit $$ret
