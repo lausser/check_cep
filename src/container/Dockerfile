@@ -120,8 +120,11 @@ FROM base AS ai
 ENV GEMINI_YOLO=true \
     GEMINI_CONFIG_HOME="/home/pwuser/.gemini"
 
+# Gemini CLI version pin (latest stable npm dist-tag, not preview/nightly)
+ARG GEMINI_CLI_VERSION=0.49.0
+
 # AI npm packages (Gemini CLI + playwright-cli)
-ARG AI_NODE_PACKAGES="@google/gemini-cli @playwright/cli"
+ARG AI_NODE_PACKAGES="@google/gemini-cli@${GEMINI_CLI_VERSION} @playwright/cli"
 RUN mkdir -p /home/pwuser/.gemini && \
     echo "--- Installing AI Addons locally ---" && \
     npm install $AI_NODE_PACKAGES && \

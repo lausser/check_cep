@@ -6,6 +6,35 @@ available in the next container image build.
 
 ---
 
+## Spec 019 — Pin Gemini CLI to Latest Stable Release
+
+**Branch**: `019-update-gemini-cli`
+
+### Summary
+
+`@google/gemini-cli` was the only build dependency in `src/container/Dockerfile`
+installed without a version pin (`npm install @google/gemini-cli @playwright/cli`),
+so every AI image build (`image-ai`, `test-image-ai`) silently resolved to
+whatever npm's `latest` dist-tag happened to be that day. Pinned it to the
+current stable release, `0.49.0`, following the same `ARG`/Makefile-variable
+pattern already used for `PLAYWRIGHT_VERSION`.
+
+### Version pin
+
+`GEMINI_CLI_VERSION` (default `0.49.0`) in `Makefile`, passed via `--build-arg`
+to the `image-ai` and `test-image-ai` targets; `ARG GEMINI_CLI_VERSION=0.49.0`
+in `src/container/Dockerfile`'s `ai` stage builds `AI_NODE_PACKAGES` as
+`@google/gemini-cli@${GEMINI_CLI_VERSION}`. Override with
+`make image-ai GEMINI_CLI_VERSION=x.y.z`. An invalid version fails the build
+loudly via npm's own `ETARGET` error — no silent fallback.
+
+### Scope
+
+Only the AI image variants are affected; `make image`/`test-image` (the
+non-AI base images) remain unchanged and gemini-free.
+
+---
+
 ## Spec 018 — Lightpanda 0.3.4 Upgrade & Broader Test Coverage
 
 **Branch**: `018-lightpanda-034-upgrade`
