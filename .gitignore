@@ -1,6 +1,9 @@
 # Development internals
 examples/
 specs/
+etc/
+docs/
+tasks/
 
 # Temp build artifact (Makefile copies .agents/skills here for Docker context)
 src/container/.agents-skills/
