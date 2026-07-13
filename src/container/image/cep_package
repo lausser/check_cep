@@ -1,0 +1,82 @@
+#!/bin/bash
+# cep_package <TestDir> — build a deployable test archive from a finished
+# authoring test folder (spec 020, contracts/package-layout.md).
+#
+# Produces <TestName>-<YYYYMMDD>.tar.gz in the site-level workspace, containing
+# a top-level <TestName>/ folder with: the Playwright test, playwright.config.ts,
+# functions/, the vision template *.png the test uses, the .env credentials
+# file, the intent file (+ its @-referenced attachments), a KNOWLEDGE.md
+# snapshot, and VERIFICATION.md.
+#
+# Single implementation for both paths: invoked directly at the end of a
+# supervised session, and by the cep_authoring orchestrator's PACKAGE phase.
+#
+# Refuses to package if it finds an obvious secret OUTSIDE .env (FR-019).
+#
+# Exit codes: 0 packaged · 1 refused (secret leak) · 2 usage / missing input.
+set -euo pipefail
+
+usage() { echo "usage: cep_package <TestDir>" >&2; exit 2; }
+
+[ $# -eq 1 ] || usage
+[ -d "$1" ] || { echo "cep_package: not a directory: $1" >&2; exit 2; }
+
+TESTDIR="$(cd "$1" && pwd)"          # absolute path to the per-test folder
+TESTNAME="$(basename "$TESTDIR")"
+WORKSPACE="$(dirname "$TESTDIR")"    # site-level workspace root (holds KNOWLEDGE.md, *.ai)
+DATE="$(date +%Y%m%d)"
+ARCHIVE="$WORKSPACE/${TESTNAME}-${DATE}.tar.gz"
+
+# --- required contents ------------------------------------------------------
+require() { [ -f "$TESTDIR/$1" ] || { echo "cep_package: missing $1 in $TESTNAME/ ($2)" >&2; exit 2; }; }
+require "$TESTNAME.test.ts" "the deterministic Playwright test"
+require "playwright.config.ts" "the per-test Playwright config"
+require "VERIFICATION.md" "run the quality gate first — it writes VERIFICATION.md"
+
+# --- assemble a staging tree named <TestName>/ ------------------------------
+STAGE="$(mktemp -d)"
+trap 'rm -rf "$STAGE"' EXIT
+DEST="$STAGE/$TESTNAME"
+mkdir -p "$DEST"
+
+# Whole test folder: test(s), config, functions/, *.png, .env, VERIFICATION.md,
+# README.md, ... (dotfiles included).
+cp -a "$TESTDIR/." "$DEST/"
+
+# Intent file + its @-referenced attachments, from the workspace root.
+if [ -f "$WORKSPACE/$TESTNAME.ai" ]; then
+    cp -a "$WORKSPACE/$TESTNAME.ai" "$DEST/"
+    grep -oE '@[[:alnum:]._/-]+' "$WORKSPACE/$TESTNAME.ai" | sed 's/^@//' | while read -r ref; do
+        [ -n "$ref" ] || continue
+        if [ -f "$WORKSPACE/$ref" ]; then
+            mkdir -p "$DEST/$(dirname "$ref")"
+            cp -a "$WORKSPACE/$ref" "$DEST/$ref"
+        fi
+    done
+fi
+
+# KNOWLEDGE.md snapshot from the workspace root.
+[ -f "$WORKSPACE/KNOWLEDGE.md" ] && cp -a "$WORKSPACE/KNOWLEDGE.md" "$DEST/"
+
+# --- secret scan: .env is the ONLY sanctioned place for credentials ---------
+# Heuristic: flag a private-key block, or a secret-named field assigned to a
+# quoted literal (e.g. password: "hunter2", apiKey='sk-...'). A bare variable
+# reference (const password = creds.password) is NOT flagged (no quote after
+# the =/:). This catches obvious hardcoded leaks with low false-positive rate.
+SECRET_RE='(-----BEGIN [A-Z ]*PRIVATE KEY-----)|(([Pp]assword|[Pp]asswd|[Ss]ecret|[Aa]pi[_-]?[Kk]ey|[Aa]pikey|[Tt]oken)["'"'"'`]?[[:space:]]*[:=][[:space:]]*["'"'"'`][^"'"'"'`[:space:]])'
+leak=0
+while IFS= read -r -d '' f; do
+    base="$(basename "$f")"
+    [ "$base" = ".env" ] && continue
+    case "$base" in *.png|*.jpg|*.jpeg|*.gif|*.webp|*.pdf) continue;; esac
+    if grep -InE "$SECRET_RE" "$f" >/dev/null 2>&1; then
+        echo "cep_package: possible secret outside .env in ${f#$STAGE/} — refusing to package (FR-019)" >&2
+        grep -InE "$SECRET_RE" "$f" | head -3 >&2
+        leak=1
+    fi
+done < <(find "$DEST" -type f -print0)
+[ "$leak" -eq 0 ] || exit 1
+
+# --- build the archive ------------------------------------------------------
+tar -C "$STAGE" -czf "$ARCHIVE" "$TESTNAME"
+echo "cep_package: wrote $ARCHIVE"

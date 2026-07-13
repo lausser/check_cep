@@ -6,6 +6,107 @@ available in the next container image build.
 
 ---
 
+## Spec 020 — AI-Assisted Test Authoring
+
+**Branch**: `020-ai-test-authoring`
+
+### Summary
+
+Added an AI-assisted **authoring** workflow that turns a non-technical user's
+plain-language intent file (`*.ai`) into a deterministic, deployable
+`check_cep` Playwright test — with **no AI at run time**. An admin enters a
+new `check_cep --authoring` mode (a bash shell in the `ai` image with the
+site-level workspace mounted read-write and `GEMINI_API_KEY` injected); the
+new `cep-test-authoring` skill guides Gemini to explore the site, author the
+test reusing the sanctioned robustness patterns, and record findings in a
+per-site `KNOWLEDGE.md`. A quality gate (immutable success criteria by
+marker-line convention, an independent critic pass in a fresh Gemini process,
+a scorable checklist, ≥2 consecutive clean runs) guards against
+assertion-weakening. Packaging is a shared `cep_package` tool; an optional
+`cep_authoring` orchestrator runs the whole loop unattended with a hard
+iteration cap. **The scheduled execution path is byte-identical to before** —
+every change is additive and gated behind `--authoring`.
+
+### Host plugin (`src/check_cep`)
+
+Two additive CLI arguments and conditional mount/env logic:
+
+- `--authoring` (default off) — implies shell semantics; mounts the
+  **site-level** tests dir (`.../tests/%h`) **read-write** (vs the read-only
+  service-level mount) and injects `GEMINI_API_KEY`. Refuses (exit 3,
+  actionable message) when combined with `--test-source s3` or when the
+  workspace directory does not exist. With no resolvable key it still starts,
+  printing a visible "AI assistant will not be functional" warning.
+- `--gemini-api-key <key>` — follows the existing credential-argument pattern
+  (`--aws-access-key-id`, `--loki-password`); resolution order arg → host
+  `GEMINI_API_KEY` → absent. Injected into the container **only** in
+  authoring mode (FR-020) — never on scheduled runs or plain `--shell`.
+
+### Container / AI image (`ai` stage only)
+
+- `chrome-devtools-mcp` (pinned `1.5.0`) added to `AI_NODE_PACKAGES` and
+  registered as a Gemini MCP server (Option A: spawns the Playwright Chrome
+  headless/isolated with `--no-sandbox`/`--disable-dev-shm-usage` for rootless
+  Podman). Exploration is two-tool: chrome-devtools-mcp **discovers**
+  candidates, `@playwright/cli` **confirms** the Playwright locator. All
+  existing AI tooling (`@playwright/cli`, playwright-cli skills, `@playwright/test`)
+  is kept.
+- New operator tools COPY'd to `/home/pwuser/.local/bin` (siblings of
+  `cep_codegen`): `cep_authoring` (unattended orchestrator), `cep_package`
+  (shared packaging tool), and `cep-cdp-mcp` (the chrome-devtools-mcp
+  launcher). The base/scheduled image never ships them.
+- `--headed`/`--vnc` now reach the authoring workflow, for **both** browsers:
+  the `cep-cdp-mcp` launcher runs the AI's exploration browser visible when
+  `HEADED=1`, and `cep_authoring`'s RUN phase adds `--headed` so the
+  verification run is visible too — so `check_cep --authoring --headed` lets an
+  operator watch the agent inspect the live site *and* watch the generated test
+  execute (verified on Wayland). Both are pinned to the standard **1280×720**
+  viewport (exploration via the MCP `--viewport` arg, the test via the authored
+  config) so the agent inspects the same geometry the deployed check runs at.
+
+### Skill, references, docs
+
+- New skill `.agents/skills/cep-test-authoring/` (staged via the existing
+  Makefile skill copy): `SKILL.md` (explore→assess→author→run→compare
+  workflow, reuse conventions, quality gate, knowledge rules) plus
+  `references/` — `intent-template.ai`, `critic-prompt.md`,
+  `quality-checklist.md`.
+- Package format fixed in `contracts/package-layout.md`: a
+  `<TestName>-<YYYYMMDD>.tar.gz` deployable unchanged via
+  `--test-artifact`/S3; `cep_package` refuses to build on a secret found
+  outside `.env`.
+- `WRITING-TESTS.md` gained a two-audience "AI-Assisted Test Authoring"
+  chapter; `README.md` a pointer; `etc/check_cep/tests/onvista/KNOWLEDGE.md`
+  seeded as a demo of the per-site knowledge convention.
+
+### Verification
+
+Integration tests (`tests/integration/test_modes.py`,
+`tests/integration/test_authoring_orchestrator.py`): authoring env-injection
++ site-level rw mount matrix, the exit-3 refusals, the no-key warning, and
+the orchestrator PREFLIGHT failures + cap-termination. Scheduled-path
+regression covered by the existing suite (`test_collision.py` unchanged and
+green).
+
+End-to-end proven live against `example.com` with `gemini-3.1-flash-lite`:
+plain-language intent → AI-authored deterministic test → 2/2 clean runs →
+independent critic **pass** → gate → packaged `.tar.gz`; the package then ran
+through the real `check_cep --test-artifact` path on the **base** image with
+`GEMINI_API_KEY` unset → `OK` with perfdata (confirms FR-020/SC-003 — no AI at
+run time). Two defects were found and fixed during this run:
+
+- The `ai`-stage `npm install` pruned the base image's `node_modules`
+  (`@playwright/test` / the `playwright` runner), which broke `npx playwright
+  test` in the authoring image. Root cause: the base stage deleted its
+  `package.json`, orphaning `node_modules`, so npm 7+ reified the tree to only
+  the AI packages. Fixed by keeping the base manifest, which makes the
+  ai-stage install additive (one npm prefix, more packages).
+- The orchestrator's critic phase logged its progress line to stdout while the
+  caller captured that stdout as the verdict — fixed so the captured function
+  emits only the verdict.
+
+---
+
 ## Spec 019 — Pin Gemini CLI to Latest Stable Release
 
 **Branch**: `019-update-gemini-cli`

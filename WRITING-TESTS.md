@@ -1191,3 +1191,132 @@ design (CTA is visually distinct from social buttons) eliminates
 ambiguity without explicit regions.
 
 See [tc_vision_example_login/README.md](tests/fixtures/tc_vision_example_login/README.md).
+
+## AI-Assisted Test Authoring
+
+An AI-assisted **authoring** workflow turns a plain-language description of a
+check into a deterministic Playwright test — no hand-written test code. A
+non-technical user describes what the check should do in an **intent file**
+(`*.ai`); a monitoring admin runs a supervised authoring session in the `ai`
+container image that explores the site and writes the test. The deployed
+check then runs on schedule like any other — **with no AI involved at run
+time**.
+
+This chapter has two parts: one for the person describing the check, one for
+the admin who runs the session.
+
+### Part 1 — For the person describing the check (no coding)
+
+You do not write any code or selectors. You fill in an **intent template**
+in plain language. Ask your admin for `intent-template.ai` (it ships with
+the `cep-test-authoring` skill), copy it to `<TestName>.ai`, and fill in:
+
+- **Title / identity** — the test name, the site, who requested it, the date.
+- **`## Target URL`** — the address where the check should start.
+- **`## Desired Flow`** — the most valuable section. Write it as the
+  **protocol of a manual session you performed yourself**: "I opened …, I
+  clicked …, I typed …, then I saw …". Be generous with detail — more is
+  better. This is what the session reproduces.
+- **`## Element Hints`** *(optional)* — anything that helps locate things:
+  button labels, unusual layouts, elements that appear only sometimes. You
+  may attach **small, tightly-cropped screenshots** of tricky elements and
+  reference them by filename with a leading `@`, e.g. *"the login button
+  looks like `@login-button.png`"*. Keep the image files next to the
+  document and send them along.
+- **`## Values to Capture`** *(optional)* — which numbers on the pages
+  should be recorded every run (e.g. "the portfolio total in EUR"). **Do not
+  set alert thresholds here** — thresholds ("warn if …", "critical if …")
+  are configured later in the metrics/alerting system, not in the test.
+- **`## Success Criteria`** — what must be true for the check to count as OK,
+  in your words. Example: *"I am logged in, I can see the portfolio page, and
+  the total value is a number greater than zero."*
+
+**The one rule:** everything above the *"DO NOT ALTER THE LINES ABOVE"*
+marker is yours. Once test development has started, do not change it — those
+lines are the contract the test is measured against. Only the *Lessons
+Learned* section below the marker is touched (automatically, by authoring
+sessions).
+
+Send `<TestName>.ai` plus any referenced images to your admin.
+
+### Part 2 — For the admin (running the session)
+
+**Enter authoring mode** — a bash shell in the `ai` image with the
+site-level workspace mounted read-write and your Gemini key available:
+
+```bash
+export GEMINI_API_KEY=...        # or pass --gemini-api-key
+check_cep --host-name onvista --service-description Portfolio \
+          --image check_cep:ai --probe-location dev \
+          --authoring
+```
+
+Place `<TestName>.ai` (and any `@`-referenced images) in the workspace root
+(`/home/pwuser/tests`), then run a supervised session:
+
+```
+gemini
+> Use the cep-test-authoring skill. Author the test described in
+> @Portfolio.ai. Consult @KNOWLEDGE.md first.
+```
+
+The session explores the site (discovering elements with the browser
+inspection tool, confirming stable Playwright locators), **asks you** when
+the intent has gaps (login walls, consent dialogs, ambiguous success — it is
+instructed to ask rather than guess), writes the test, runs it until it is
+stably green, and records site findings in `KNOWLEDGE.md`.
+
+**Watch the session (optional).** Add `--headed` (or `--vnc` where direct
+display forwarding fails) to the authoring command and **both** browsers of
+the workflow open **visibly** on your desktop:
+
+- the AI's **exploration** browser — navigating and inspecting the live site
+  while it works out the locators, and
+- the **verification** run — the generated `npx playwright test` executing, so
+  you can watch the finished script actually pass (`CEP_SLOW_MO` slows it down
+  to a watchable pace, as with regular headed checks).
+
+Without `--headed` both run headless. The agent drives the exploration browser
+programmatically (fast). None of this touches the deployed check — it never
+opens a visible browser and needs no AI.
+
+**Choose a realistic maximum runtime.** The authored check runs on a
+schedule under the normal `check_cep --timeout` (default **60 s**). Keep the
+test well inside that budget — a monitoring check should be quick and
+focused, not an exhaustive tour. If a flow genuinely needs longer, agree an
+explicit timeout with whoever owns the service definition.
+
+**Review before deploying:**
+
+- Read `Portfolio/VERIFICATION.md` — a 60-second report of what was
+  *Verified*, *Assumed*, *Could not verify*, and where the site *Deviated*
+  from the described flow.
+- Recommended: watch the finished test once yourself in spectate mode
+  (`CEP_SPECTATE=1 … --headed`, see *Headed Mode* above).
+
+**If it is not right, refine the intent — never hand-patch the test.** Edit
+`Portfolio.ai` (with the person who requested it) and re-run the session;
+previous attempts' lessons are already recorded in the file. Hand-editing the
+generated test breaks the guarantee that the test matches the intent.
+
+When you are satisfied, the session packages the test into a
+`<TestName>-<date>.tar.gz` deployable through the normal
+`--test-artifact` / S3 mechanisms (see the deployment sections above).
+
+### Deployment is AI-free (no `GEMINI_API_KEY`, no browser inspection)
+
+An AI-authored check is an ordinary deterministic Playwright test. When it
+runs on a schedule it needs **no** `GEMINI_API_KEY` and involves **no**
+`chrome-devtools-mcp` or any other authoring tooling — those exist only in
+authoring mode:
+
+- The Gemini credential is injected into the container **only** when
+  `--authoring` is passed. On scheduled runs and plain `--shell`, no key is
+  injected even if `GEMINI_API_KEY` is set in the host environment.
+- The browser-inspection MCP server is registered only in the `ai` image and
+  is never invoked by a packaged test at run time.
+
+To confirm on a production host: the deployed check runs green with
+`GEMINI_API_KEY` unset, and the plugin never adds a `GEMINI_API_KEY=…`
+`--env` to the podman command outside authoring mode (covered by the
+authoring env-injection tests in `tests/integration/test_modes.py`).

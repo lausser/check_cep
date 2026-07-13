@@ -233,9 +233,13 @@ class RunConfig:
     # Behaviour flags
     debug: bool
     shell: bool
+    authoring: bool
     headed: bool
     vnc: bool
     browser: str
+
+    # AI authoring credential (injected only in authoring mode)
+    gemini_api_key: Optional[str]
 
     # Reporting
     report_url: Optional[str]
@@ -623,7 +627,34 @@ def build_env_vars(ctx: RunContext) -> Dict[str, str]:
     if ctx.config.current_status:
         env["NAGIOS_CURRENT_STATUS"] = ctx.config.current_status
 
+    # AI authoring credential (spec 020, FR-020/FR-021). Injected ONLY when
+    # authoring mode is active, and only when a key is resolvable (arg → host
+    # env). Scheduled runs and plain --shell never carry this. When no key is
+    # resolvable, authoring still starts (warning emitted in main()) but the AI
+    # assistant is non-functional — nothing is injected here.
+    if ctx.config.authoring:
+        gemini_key = ctx.config.gemini_api_key or os.environ.get("GEMINI_API_KEY")
+        if gemini_key:
+            env["GEMINI_API_KEY"] = gemini_key
+
     return env
+
+
+# ---------------------------------------------------------------------------
+# Authoring workspace resolution (spec 020)
+# ---------------------------------------------------------------------------
+
+def authoring_workspace_dir(ctx: RunContext) -> str:
+    """Resolve the site-level authoring workspace (--authoring mode only).
+
+    Unlike the per-service test mount (`.../tests/%h/%s`), authoring mounts the
+    SITE-LEVEL directory (`.../tests/%h`) so the session can read/write the
+    shared KNOWLEDGE.md and create sibling test folders. Overridable via
+    --test-dir. Returns an absolute path (may not exist — callers validate).
+    """
+    raw_dir = ctx.config.test_dir or (ctx.omd_root + "/etc/check_cep/tests/%h")
+    return os.path.abspath(resolve_path_template(
+        raw_dir, ctx.hostname, ctx.servicedescription, ctx.started_str))
 
 
 # ---------------------------------------------------------------------------
@@ -658,7 +689,13 @@ def build_podman_command(ctx: RunContext, container_bin: str,
         cmd.extend(["--env", f"{key}={value}"])
 
     # Conditional volume mounts
-    if ctx.config.test_source == "local":
+    if ctx.config.authoring:
+        # Authoring mode (spec 020): mount the SITE-LEVEL workspace READ-WRITE
+        # so the session can read/write KNOWLEDGE.md and create sibling test
+        # folders. Gated behind --authoring; scheduled runs never take this path.
+        cmd.extend(["--volume",
+                    f"{authoring_workspace_dir(ctx)}:/home/pwuser/tests:rw,z"])
+    elif ctx.config.test_source == "local":
         if ctx.config.test_artifact:
             local_path = ctx.config.test_artifact
         else:
@@ -722,6 +759,16 @@ def build_podman_command(ctx: RunContext, container_bin: str,
                     "--volume", f"{xauthority}:/tmp/.Xauthority:ro",
                     "--env", "XAUTHORITY=/tmp/.Xauthority",
                 ])
+
+    # Authoring mode: map the container user to the host operator so writes to
+    # the read-write site workspace are owned correctly (create test folders,
+    # KNOWLEDGE.md, packages). Mirrors the headed keep-id; skipped when headed
+    # already added it. Authoring-only — scheduled runs are untouched.
+    if ctx.config.authoring and not (ctx.config.headed or ctx.config.vnc):
+        cmd.extend([
+            f"--userns=keep-id:uid={CONTAINER_UID},gid={CONTAINER_GID}",
+            "--security-opt", "label=disable",
+        ])
 
     # Shell mode: replace entrypoint with bash
     if ctx.config.shell:
@@ -1320,6 +1367,11 @@ def build_argument_parser() -> ArgumentParser:
                         help="Enable verbose logging")
     parser.add_argument("--shell", action="store_true", default=False,
                         help="Start container with bash instead of run.py")
+    parser.add_argument("--authoring", action="store_true", default=False,
+                        help="Enter AI-assisted test authoring mode (implies shell "
+                             "semantics; intended for the 'ai' image). Mounts the "
+                             "site-level tests dir read-write and injects "
+                             "GEMINI_API_KEY. Never affects scheduled runs.")
     parser.add_argument("--headed", action="store_true", default=False,
                         help="Run browsers in headed mode (Wayland/X11 auto-detected, debug only)")
     parser.add_argument("--vnc", action="store_true", default=False,
@@ -1354,6 +1406,12 @@ def build_argument_parser() -> ArgumentParser:
     parser.add_argument("--loki-password", dest="loki_password", default=None)
     parser.add_argument("--loki-proxy", dest="loki_proxy", default=None)
 
+    # AI authoring credential (only used in --authoring mode)
+    parser.add_argument("--gemini-api-key", dest="gemini_api_key", default=None,
+                        help="Gemini API key for AI-assisted authoring mode. "
+                             "Falls back to the host GEMINI_API_KEY env var. "
+                             "Injected into the container only with --authoring.")
+
     # Naemon state
     parser.add_argument("--current-status", dest="current_status", default=None,
                         help="$SERVICESTATE$/$SERVICESTATETYPE$/...")
@@ -1365,6 +1423,12 @@ def main() -> int:
     """Main entry point."""
     parser = build_argument_parser()
     args = parser.parse_args()
+
+    # --authoring implies shell semantics (interactive bash entrypoint). Set it
+    # here so every existing shell code path (entrypoint, exit handling,
+    # execute_container) is reused; authoring adds only the rw mount + env key.
+    if args.authoring:
+        args.shell = True
 
     # Capture process start time before any path resolution so %t is available
     start_time = time.time()
@@ -1390,6 +1454,8 @@ def main() -> int:
         memory_limit=args.memory_limit,
         debug=args.debug,
         shell=args.shell,
+        authoring=args.authoring,
+        gemini_api_key=args.gemini_api_key,
         headed=args.headed,
         vnc=args.vnc,
         browser=args.browser,
@@ -1469,6 +1535,14 @@ def main() -> int:
     if config.test_dir is not None:
         print("WARNING: --test-dir is deprecated, use --test-artifact instead",
               file=sys.stderr)
+    # Authoring works on a local site workspace; refuse S3 sourcing up front
+    # (before the S3-arg validation) so the message is authoring-specific.
+    if config.authoring and config.test_source == "s3":
+        return nagios_exit("UNKNOWN",
+                           "--authoring works on a local site workspace and "
+                           "cannot be combined with --test-source s3; omit "
+                           "--test-source (or use local) and run against the "
+                           "site-level tests directory")
     if config.test_source == "s3":
         if not config.test_artifact:
             return nagios_exit("UNKNOWN",
@@ -1520,6 +1594,25 @@ def main() -> int:
         config=config,
     )
     logger.debug("RunContext: %s", ctx)
+
+    # ---------------------------------------------------------------------------
+    # Authoring-mode validation (spec 020, contracts/authoring-cli.md §1)
+    # ---------------------------------------------------------------------------
+    if config.authoring:
+        workspace = authoring_workspace_dir(ctx)
+        if not os.path.isdir(workspace):
+            return nagios_exit("UNKNOWN",
+                               f"--authoring workspace does not exist: {workspace} "
+                               "(create the site-level tests directory, e.g. "
+                               "$OMD_ROOT/etc/check_cep/tests/<host>, or pass "
+                               "--test-dir)")
+        # A missing key is not fatal — authoring still starts so the operator can
+        # explore — but the AI assistant will not work. Warn visibly.
+        if not (config.gemini_api_key or os.environ.get("GEMINI_API_KEY")):
+            print("WARNING: --authoring started without a Gemini API key "
+                  "(neither --gemini-api-key nor GEMINI_API_KEY set); the AI "
+                  "assistant will not be functional in this session.",
+                  file=sys.stderr, flush=True)
 
     # ---------------------------------------------------------------------------
     # PID file concurrency check
