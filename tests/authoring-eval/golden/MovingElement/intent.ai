@@ -1,0 +1,41 @@
+# Test Intent: MovingElement
+
+Site: nordbank-probes
+Requested by: monitoring team
+Date: 2026-07-13
+
+## Target URL
+
+Open the file `probes/moving-element/index.html`.
+
+## Desired Flow
+
+I opened the page. A small orange diamond badge sat somewhere inside a large
+bordered area — and it moved to a different spot each time I reloaded. I clicked
+the badge and the status changed to "Caught the badge!".
+
+## Element Hints
+
+- The badge moves to a new position on every visit, so its coordinates and DOM
+  path are not reliable. It looks like @assets/badge.png — match it as an image
+  and click wherever it currently is.
+
+## Values to Capture
+
+(none)
+
+## Success Criteria
+
+The moving badge is clicked wherever it happens to be (status becomes "Caught the
+badge!").
+
+<!-- ═══════════════════════════════════════════════════════════════
+     DO NOT ALTER THE LINES ABOVE once this document has initiated
+     test development. Only the Lessons Learned section below may be
+     extended by authoring sessions.
+     ═══════════════════════════════════════════════════════════════ -->
+
+## Lessons Learned
+
+<!-- Reserved for authoring sessions. Do not fill this in.
+     Entries below are added automatically from real testing attempts. -->

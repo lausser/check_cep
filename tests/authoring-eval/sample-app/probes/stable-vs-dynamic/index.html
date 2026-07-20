@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Probe — stable vs dynamic value</title>
+  <style>
+    body { font-family: system-ui, Arial, sans-serif; margin: 0; color: #1f2933; }
+    header { padding: 20px; background: #0b3d61; color: #fff; }
+    main { padding: 24px; max-width: 640px; }
+    .kv { display: grid; grid-template-columns: max-content 1fr; gap: 8px 24px; margin: 20px 0; }
+    .kv dt { color: #6b7683; }
+    .kv dd { margin: 0; font-weight: 700; font-size: 18px; }
+  </style>
+</head>
+<body>
+  <header><strong>Probe:</strong> one stable value, one dynamic value</header>
+  <main>
+    <p>The account number is <strong>stable</strong> (safe to assert). The session
+       clock ticks every second — it is <strong>dynamic</strong> and must be
+       captured, never asserted literally.</p>
+
+    <dl class="kv">
+      <dt>Account number</dt>
+      <dd id="account-number">4711-0815-2300</dd>
+
+      <dt>Available balance</dt>
+      <dd id="balance">€ 3,120.75</dd>
+
+      <dt>Session time</dt>
+      <dd id="session-clock">…</dd>
+    </dl>
+  </main>
+
+  <script>
+    // Dynamic: updates every second, never the same twice — unassertable.
+    function tick() {
+      document.getElementById('session-clock').textContent = new Date().toString();
+    }
+    tick();
+    setInterval(tick, 1000);
+  </script>
+</body>
+</html>

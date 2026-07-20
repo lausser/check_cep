@@ -1,0 +1,358 @@
+#!/bin/bash
+# cep_authoring [OPTIONS] <intent-file.ai> — unattended AI test-authoring loop
+# (spec 020, contracts/authoring-cli.md §2). Runs INSIDE the authoring `ai`
+# image. Loop per iteration:
+#
+#   PREFLIGHT → AUTHOR → RUN(×N clean) → CRITIC → GATE ─ pass → PACKAGE → done
+#                                                    └ fail → next iteration
+#                                          (until the iteration cap → REPORT)
+#
+# Always terminates: package on success, progress report at the cap, or a
+# PREFLIGHT failure. Interruptible (SIGINT/SIGTERM) — stops promptly and
+# leaves the workspace inspectable.
+#
+# Exit codes (orchestrator/shell codes, NOT Nagios status codes — this tool is
+# never on the monitoring output path):
+#   0  package produced
+#   1  terminated without a package (cap reached / gate never passed)
+#   2  PREFLIGHT or usage error
+#   130 interrupted
+#
+# `gemini` and `npx` are resolved from PATH so the loop can be driven by stubs
+# in tests.
+set -uo pipefail
+
+# --- defaults & CLI ---------------------------------------------------------
+MAX_ITER=5
+CLEAN_RUNS=2
+DRY_RUN=0
+INTENT=""
+
+# Per-run metrics (spec 021 FR-015 / data-model §7). Pinned model recorded for
+# trend tracking; the gemini CLI itself reads GEMINI_MODEL from the environment.
+MODEL="${GEMINI_MODEL:-gemini-3.1-flash-lite}"
+START_EPOCH="$(date +%s)"
+MODEL_TURNS=0
+
+usage() {
+    cat >&2 <<EOF
+usage: cep_authoring [OPTIONS] <intent-file.ai>
+  -n, --max-iterations N   hard iteration cap (default 5)
+  -r, --clean-runs N       consecutive clean runs required (default 2)
+      --dry-run            PREFLIGHT only: validate and report, run nothing
+EOF
+    exit 2
+}
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -n|--max-iterations) MAX_ITER="${2:-}"; shift 2 || usage ;;
+        -r|--clean-runs)     CLEAN_RUNS="${2:-}"; shift 2 || usage ;;
+        --dry-run)           DRY_RUN=1; shift ;;
+        -h|--help)           usage ;;
+        -*)                  echo "cep_authoring: unknown option: $1" >&2; usage ;;
+        *)                   [ -z "$INTENT" ] || usage; INTENT="$1"; shift ;;
+    esac
+done
+
+[ -n "$INTENT" ] || usage
+case "$MAX_ITER" in ''|*[!0-9]*) echo "cep_authoring: -n must be an integer" >&2; exit 2;; esac
+case "$CLEAN_RUNS" in ''|*[!0-9]*) echo "cep_authoring: -r must be an integer" >&2; exit 2;; esac
+
+# --- derived paths ----------------------------------------------------------
+[ -f "$INTENT" ] || { echo "cep_authoring: intent file not found: $INTENT" >&2; exit 2; }
+INTENT="$(cd "$(dirname "$INTENT")" && pwd)/$(basename "$INTENT")"
+WORKSPACE="$(dirname "$INTENT")"           # site-level workspace root
+TESTNAME="$(basename "$INTENT" .ai)"
+TESTDIR="$WORKSPACE/$TESTNAME"
+KNOWLEDGE="$WORKSPACE/KNOWLEDGE.md"
+PROGRESS="$WORKSPACE/${TESTNAME}-progress.md"
+METRICS="$WORKSPACE/${TESTNAME}-metrics.json"
+SKILL_DIR="${CEP_SKILL_DIR:-/home/pwuser/.agents/skills/cep-test-authoring}"
+CRITIC_PROMPT="$SKILL_DIR/references/critic-prompt.md"
+
+log() { echo "$*"; }        # one line per phase transition, on stdout
+
+# --- interruption handling --------------------------------------------------
+on_interrupt() {
+    echo "cep_authoring: interrupted — stopping; workspace left inspectable at $TESTDIR" >&2
+    exit 130
+}
+trap on_interrupt INT TERM
+
+# --- PREFLIGHT --------------------------------------------------------------
+# Order matters: validate intent structure and @-references BEFORE the key
+# check so a broken intent is reported even without a key.
+preflight() {
+    log "PREFLIGHT: $INTENT"
+
+    local missing=0 section
+    for section in "# Test Intent:" "## Target URL" "## Desired Flow" \
+                   "## Success Criteria" "## Lessons Learned"; do
+        if ! grep -qF "$section" "$INTENT"; then
+            echo "cep_authoring: PREFLIGHT: missing required section: '$section'" >&2
+            missing=1
+        fi
+    done
+    [ "$missing" -eq 0 ] || return 2
+
+    # Every @-referenced file must exist (resolved relative to the intent file).
+    local ref
+    while read -r ref; do
+        [ -n "$ref" ] || continue
+        if [ ! -f "$WORKSPACE/$ref" ]; then
+            echo "cep_authoring: PREFLIGHT: referenced file not found: @$ref" >&2
+            missing=1
+        fi
+    done < <(grep -oE '@[[:alnum:]._/-]+' "$INTENT" | sed 's/^@//')
+    [ "$missing" -eq 0 ] || return 2
+
+    if [ -f "$KNOWLEDGE" ]; then
+        log "PREFLIGHT: site knowledge found: $KNOWLEDGE"
+    else
+        log "PREFLIGHT: no KNOWLEDGE.md yet (will be created on first findings)"
+    fi
+
+    if [ -z "${GEMINI_API_KEY:-}" ]; then
+        echo "cep_authoring: PREFLIGHT: GEMINI_API_KEY is not set — the AI assistant cannot run" >&2
+        return 2
+    fi
+
+    log "PREFLIGHT: OK (test=$TESTNAME, cap=$MAX_ITER, clean-runs=$CLEAN_RUNS)"
+    return 0
+}
+
+# --- AUTHOR -----------------------------------------------------------------
+# Headless gemini writes/edits the test folder, loading the authoring skill.
+# $1 = extra guidance (critic findings from the previous iteration, or empty).
+phase_author() {
+    local iter="$1" feedback="$2"
+    log "[iter $iter/$MAX_ITER] AUTHOR"
+    # Fail loudly if the workspace is not writable. A silent mkdir failure (rw
+    # mount owned by a different UID than the container user — see check_cep's
+    # --userns=keep-id for authoring) leaves the AI with nowhere to write, and
+    # the loop then burns every iteration reporting "no clean runs" instead of
+    # the real cause.
+    if ! mkdir -p "$TESTDIR" 2>/dev/null || [ ! -w "$TESTDIR" ]; then
+        echo "cep_authoring: cannot create/write $TESTDIR — is the workspace" \
+             "mounted read-write and owned by uid $(id -u)? (podman:" \
+             "--userns=keep-id:uid=\$CONTAINER_UID,gid=\$CONTAINER_GID)" >&2
+        return 3    # unrecoverable environment problem — caller aborts (not retryable)
+    fi
+    # Paths given to the model MUST be absolute: gemini inherits this process's
+    # cwd, which is NOT the workspace when the orchestrator is launched from
+    # elsewhere (e.g. `podman run … cep_authoring`, cwd=/home/pwuser). A relative
+    # "$TESTNAME/" made the model author into the wrong directory, so the RUN
+    # phase found no test and the loop burned every iteration. Belt and braces:
+    # absolute paths in the prompt AND run gemini from the workspace.
+    local prompt="Use the cep-test-authoring skill. The workspace root is \
+$WORKSPACE (your current directory); every file you create MUST live under it. \
+Author the deterministic \
+Playwright test described in @$INTENT into the folder $TESTDIR/ (use this \
+absolute path; do not create the folder anywhere else). Consult \
+@$KNOWLEDGE first if it exists. Explore with chrome-devtools-mcp to discover \
+elements and confirm stable Playwright locators, reuse the sanctioned \
+robustness patterns, emit every requested value as perfdata, update \
+$KNOWLEDGE, and write $TESTDIR/VERIFICATION.md."
+    [ -n "$feedback" ] && prompt="$prompt
+
+The independent critic rejected the previous attempt. Address these findings \
+without weakening any assertion or editing the immutable intent region:
+$feedback"
+    ( cd "$WORKSPACE" && gemini -p "$prompt" --approval-mode=yolo )
+}
+
+# --- RUN --------------------------------------------------------------------
+# npx playwright test, repeated until $CLEAN_RUNS consecutive clean runs or a
+# failure. Returns 0 on the required streak, 1 on a failing run.
+phase_run() {
+    local iter="$1" n=0
+    # Honor HEADED (check_cep --headed/--vnc): run the verification VISIBLY so an
+    # operator can watch the generated test actually execute, mirroring run.py.
+    # --headed overrides the test's headless config; the Chromium wrapper handles
+    # the Wayland/X11 display.
+    local headed_flag=""
+    [ "${HEADED:-0}" = "1" ] && headed_flag="--headed"
+
+    # Slow-motion verification (FR-016, research R10): when CEP_SLOW_MO is set and
+    # we are headed, generate a transient config wrapper that injects
+    # launchOptions.slowMo and run against it — so an operator can watch the
+    # generated test execute at a human pace. Off by default; this affects ONLY
+    # the transient verification run, never the packaged test's own config, so it
+    # cannot alter authored-test determinism. Mirrors run.py.
+    local config_flag=""
+    if [ "${HEADED:-0}" = "1" ] && [ -n "${CEP_SLOW_MO:-}" ]; then
+        local wrapper="/tmp/_cep_authoring_slowmo.ts" base=""
+        for name in playwright.config.ts playwright.config.js; do
+            [ -f "$TESTDIR/$name" ] && { base="$name"; break; }
+        done
+        if [ -n "$base" ]; then
+            cat > "$wrapper" <<EOF
+import base from '$TESTDIR/$base';
+const use = (base as any).use || {};
+const lo = use.launchOptions || {};
+export default { ...(base as any), testDir: '$TESTDIR',
+  use: { ...use, launchOptions: { ...lo, slowMo: ${CEP_SLOW_MO} } } };
+EOF
+        else
+            cat > "$wrapper" <<EOF
+export default { testDir: '$TESTDIR',
+  use: { launchOptions: { slowMo: ${CEP_SLOW_MO} } } };
+EOF
+        fi
+        config_flag="--config $wrapper"
+        log "[iter $iter/$MAX_ITER] RUN: slow-motion enabled (slowMo=${CEP_SLOW_MO})"
+    fi
+
+    while [ "$n" -lt "$CLEAN_RUNS" ]; do
+        if ( cd "$TESTDIR" && npx playwright test $headed_flag $config_flag ); then
+            n=$((n + 1))
+            log "[iter $iter/$MAX_ITER] RUN: $n/$CLEAN_RUNS clean runs"
+        else
+            log "[iter $iter/$MAX_ITER] RUN: failed (streak reset)"
+            return 1
+        fi
+    done
+    return 0
+}
+
+# --- CRITIC -----------------------------------------------------------------
+# Fresh gemini process, prompt = fixed critic template + intent + test files.
+# Prints ONLY the verdict ("pass"/"fail") on stdout (empty on parse failure) —
+# the caller captures it via $(...), so nothing else may go to stdout here; the
+# phase-transition line is logged by the caller.
+phase_critic() {
+    local iter="$1"
+    [ -f "$CRITIC_PROMPT" ] || { echo "cep_authoring: critic prompt missing: $CRITIC_PROMPT" >&2; return 1; }
+
+    local payload
+    payload="$(cat "$CRITIC_PROMPT")"$'\n\n=== INTENT FILE ===\n'"$(cat "$INTENT")"$'\n\n=== TEST FILES ===\n'
+    local f
+    while IFS= read -r -d '' f; do
+        payload="$payload"$'\n--- '"${f#$TESTDIR/}"$' ---\n'"$(cat "$f")"
+    done < <(find "$TESTDIR" -type f \( -name '*.ts' -o -name '*.js' -o -name '*.json' \) -print0)
+
+    local raw verdict
+    raw="$(gemini -p "$payload" --output-format json --approval-mode=default 2>/dev/null)"
+    # The gemini JSON envelope carries the model text under .response; that text
+    # is itself the {"verdict",...} JSON. Extract robustly with node.
+    verdict="$(printf '%s' "$raw" | node -e '
+        let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{
+          let v="";
+          try{const env=JSON.parse(s);const inner=env.response??s;
+              const m=String(inner).match(/\{[\s\S]*\}/);
+              if(m){v=(JSON.parse(m[0]).verdict||"").toLowerCase();}}catch(e){}
+          process.stdout.write(v);
+        });' 2>/dev/null)"
+    printf '%s' "$verdict"
+}
+
+# --- GATE -------------------------------------------------------------------
+# Pragmatic scorable gate: the required clean-run streak was achieved (checked
+# by the caller), the critic verdict is pass, and VERIFICATION.md exists. The
+# remaining checklist items are enforced by the skill (during AUTHOR) and by
+# cep_package (secret scan, required files) at PACKAGE time.
+phase_gate() {
+    local iter="$1" verdict="$2"
+    if [ "$verdict" != "pass" ]; then
+        log "[iter $iter/$MAX_ITER] GATE: critic verdict='${verdict:-unparseable}' — not passing"
+        return 1
+    fi
+    if [ ! -f "$TESTDIR/VERIFICATION.md" ]; then
+        log "[iter $iter/$MAX_ITER] GATE: VERIFICATION.md missing — not passing"
+        return 1
+    fi
+    log "[iter $iter/$MAX_ITER] GATE: pass"
+    return 0
+}
+
+# --- per-run metrics record (FR-015, data-model §7) -------------------------
+# Compact, machine-readable; written at STOP/PACKAGE. Consumed by the eval
+# harness for trend tracking — never gates pass/fail.
+write_metrics() {
+    local outcome="$1" iterations="$2"
+    local wall=$(( $(date +%s) - START_EPOCH ))
+    cat > "$METRICS" <<EOF
+{
+  "iterations_used": ${iterations},
+  "model_turns": ${MODEL_TURNS},
+  "wall_seconds": ${wall},
+  "outcome": "${outcome}",
+  "model": "${MODEL}"
+}
+EOF
+    log "wrote metrics: $METRICS (outcome=$outcome, iterations=$iterations, turns=$MODEL_TURNS, ${wall}s)"
+}
+
+# --- progress report at cap exhaustion -------------------------------------
+write_progress_report() {
+    local reason="$1"
+    {
+        echo "# cep_authoring progress report — $TESTNAME"
+        echo
+        echo "- Date: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+        echo "- Outcome: NO PACKAGE ($reason)"
+        echo "- Iterations run: $MAX_ITER / $MAX_ITER"
+        echo "- Clean runs required: $CLEAN_RUNS"
+        echo
+        echo "The workspace is left inspectable at: $TESTDIR"
+        echo "Refine the intent file ($INTENT) and re-run, or finish the test"
+        echo "in a supervised session (gemini + the cep-test-authoring skill)."
+    } > "$PROGRESS"
+    log "wrote progress report: $PROGRESS"
+}
+
+# --- main -------------------------------------------------------------------
+preflight; rc=$?
+if [ "$rc" -ne 0 ]; then
+    write_metrics "preflight_fail" 0
+    exit "$rc"
+fi
+
+if [ "$DRY_RUN" -eq 1 ]; then
+    log "DRY-RUN: PREFLIGHT passed; would run up to $MAX_ITER iterations \
+(AUTHOR → RUN×$CLEAN_RUNS → CRITIC → GATE → PACKAGE). Nothing executed."
+    exit 0
+fi
+
+feedback=""
+iter=1
+while [ "$iter" -le "$MAX_ITER" ]; do
+    MODEL_TURNS=$((MODEL_TURNS + 1))       # AUTHOR gemini call
+    phase_author "$iter" "$feedback"
+    # Exit 3 = workspace not writable: retrying cannot help, so stop immediately
+    # rather than burning the whole iteration budget on a mislabelled failure.
+    if [ $? -eq 3 ]; then
+        write_metrics "workspace_unwritable" "$iter"
+        log "STOP: workspace not writable — see the error above"
+        exit 2
+    fi
+
+    if ! phase_run "$iter"; then
+        feedback="The test did not achieve $CLEAN_RUNS consecutive clean runs."
+        iter=$((iter + 1)); continue
+    fi
+
+    log "[iter $iter/$MAX_ITER] CRITIC"
+    MODEL_TURNS=$((MODEL_TURNS + 1))       # CRITIC gemini call
+    verdict="$(phase_critic "$iter")"
+    if phase_gate "$iter" "$verdict"; then
+        log "[iter $iter/$MAX_ITER] PACKAGE"
+        if cep_package "$TESTDIR"; then
+            write_metrics "packaged" "$iter"
+            log "DONE: package produced for $TESTNAME"
+            exit 0
+        fi
+        # cep_package refused (e.g. secret outside .env) — treat as a gate fail.
+        feedback="Packaging was refused (see cep_package output above); fix and retry."
+    else
+        feedback="Critic verdict was '${verdict:-unparseable}'. Resolve every \
+finding it raised; do not weaken assertions."
+    fi
+    iter=$((iter + 1))
+done
+
+write_progress_report "iteration cap reached without a passing gate"
+write_metrics "cap_reached" "$MAX_ITER"
+log "STOP: cap of $MAX_ITER iterations reached, no package produced"
+exit 1

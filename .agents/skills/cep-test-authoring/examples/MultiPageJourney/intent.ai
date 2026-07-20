@@ -1,0 +1,63 @@
+# Test Intent: MultiPageJourney
+
+Site: nordbank
+Requested by: monitoring team
+Date: 2026-07-13
+
+## Target URL
+
+Open the file `journey/index.html` — the Nordbank landing page shipped in this
+workspace (the fake online-banking start page).
+
+## Desired Flow
+
+I opened the Nordbank landing page. It is a busy marketing homepage with a big
+hero banner, lots of promo tiles, a main navigation bar, and a cluttered footer.
+There is NO login form on this first page.
+
+To reach online banking I had to look carefully: up in the small links at the
+very top-right, among "Private", "Business", "Help", "Contact" and others, there
+is one link labelled "Online Banking". I clicked it.
+
+That took me to an "Online Banking" information page — more marketing, feature
+promos, and several calls to action ("Register now", "Download the app", "System
+status"). The step that actually leads to the login is not a big button; it is a
+promo link that reads "Sign in to your account". I clicked that.
+
+Now I was on the login wall: a username field and a password field. I typed the
+demo username and the demo password, then clicked "Sign in".
+
+I landed on my accounts dashboard. It shows my account name, my IBAN, and my
+available balance, plus a "Last login" timestamp near the bottom.
+
+## Element Hints
+
+- The "Online Banking" entry is one link among many in the top utility bar
+  (top-right). It is easy to miss.
+- On the interstitial page, the link that leads to the login reads
+  "Sign in to your account" and is styled like an ordinary promo link, not a
+  prominent button.
+- The demo credentials are username `demo` and password `Passw0rd!` (carried in
+  the package `.env` as DEMO_USER / DEMO_PASS).
+
+## Values to Capture
+
+- The available balance shown on the dashboard, in EUR (e.g. "4250.00").
+
+## Success Criteria
+
+I am signed in and looking at the accounts dashboard. I can see the account name
+"Demo Checking Account", the IBAN, and an available balance that is a number
+greater than zero. The "Last login" time is shown but, because it changes every
+visit, it must NOT be checked for a specific value.
+
+<!-- ═══════════════════════════════════════════════════════════════
+     DO NOT ALTER THE LINES ABOVE once this document has initiated
+     test development. Only the Lessons Learned section below may be
+     extended by authoring sessions.
+     ═══════════════════════════════════════════════════════════════ -->
+
+## Lessons Learned
+
+<!-- Reserved for authoring sessions. Do not fill this in.
+     Entries below are added automatically from real testing attempts. -->

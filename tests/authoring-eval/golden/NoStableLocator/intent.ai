@@ -1,0 +1,40 @@
+# Test Intent: NoStableLocator
+
+Site: nordbank-probes
+Requested by: monitoring team
+Date: 2026-07-13
+
+## Target URL
+
+Open the file `probes/no-stable-locator/index.html`.
+
+## Desired Flow
+
+I opened the page. There is a play-style control drawn as a picture (an orange
+diamond with a white centre) sitting alone in a panel. There is no text on it. I
+clicked it and the status changed from "Idle" to "Playing".
+
+## Element Hints
+
+- The control is an icon with no text, role, or stable class/id (its wrapper
+  class is randomised each load), so a normal selector will not work. It looks
+  like @assets/play-icon.png — match it as an image.
+
+## Values to Capture
+
+(none)
+
+## Success Criteria
+
+The icon-only control is activated (status becomes "Playing").
+
+<!-- ═══════════════════════════════════════════════════════════════
+     DO NOT ALTER THE LINES ABOVE once this document has initiated
+     test development. Only the Lessons Learned section below may be
+     extended by authoring sessions.
+     ═══════════════════════════════════════════════════════════════ -->
+
+## Lessons Learned
+
+<!-- Reserved for authoring sessions. Do not fill this in.
+     Entries below are added automatically from real testing attempts. -->

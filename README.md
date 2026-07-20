@@ -134,6 +134,24 @@ Your test directory should look like this:
 You can have multiple test files, helper modules, and fixture files. Playwright
 discovers all `*.test.ts` / `*.test.js` files under the configured `testDir`.
 
+### Don't want to write the test yourself?
+
+The `ai` image includes an **AI-assisted authoring** workflow: a
+non-technical user describes the check in a plain-language intent file
+(`*.ai`), and an admin runs a supervised session that explores the site and
+writes a deterministic test — no hand-written code. The deployed check runs
+with no AI at run time.
+
+```bash
+check_cep --host-name onvista --service-description Portfolio \
+          --image check_cep:ai --probe-location dev --authoring
+```
+
+See the **AI-Assisted Test Authoring** chapter in
+[WRITING-TESTS.md](WRITING-TESTS.md#ai-assisted-test-authoring) for the full
+walkthrough (the intent template, the supervised session, review, and
+packaging).
+
 ## 3. Run the Test
 
 ```bash

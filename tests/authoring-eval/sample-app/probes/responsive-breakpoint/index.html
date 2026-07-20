@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Probe — responsive breakpoint</title>
+  <style>
+    body { font-family: system-ui, Arial, sans-serif; margin: 0; color: #1f2933; }
+    header { padding: 20px; background: #0b3d61; color: #fff; }
+    main { padding: 24px; max-width: 900px; }
+    /* Desktop (≥1000px, so the pinned 1280×720 viewport is "desktop"): a full nav
+       with the primary CTA visible. Narrow: the CTA collapses into a hamburger. */
+    #desktop-cta { display: inline-block; padding: 10px 16px; background: #1c7ed6; color: #fff; border: none; border-radius: 6px; cursor: pointer; }
+    #mobile-cta { display: none; padding: 10px 14px; cursor: pointer; }
+    @media (max-width: 999px) {
+      #desktop-cta { display: none; }
+      #mobile-cta { display: inline-block; }
+    }
+    #result { margin-top: 18px; font-weight: 600; }
+  </style>
+</head>
+<body>
+  <header><strong>Probe:</strong> layout differs across a viewport breakpoint</header>
+  <main>
+    <p>At the pinned <strong>1280×720</strong> viewport this is the desktop layout,
+       so the primary "Transfer money" CTA is visible. If exploration and the run
+       used mismatched viewports (the 020 bug), the element would be hidden behind
+       the hamburger and the test would flake.</p>
+
+    <button id="desktop-cta" data-clicked="false">Transfer money</button>
+    <button id="mobile-cta" data-clicked="false">☰ Menu</button>
+
+    <div id="result" data-done="false">No transfer yet.</div>
+  </main>
+
+  <script>
+    function done() {
+      var r = document.getElementById('result');
+      r.textContent = 'Transfer started.';
+      r.setAttribute('data-done', 'true');
+    }
+    document.getElementById('desktop-cta').addEventListener('click', function () {
+      this.setAttribute('data-clicked', 'true'); done();
+    });
+    document.getElementById('mobile-cta').addEventListener('click', function () {
+      this.setAttribute('data-clicked', 'true');
+    });
+  </script>
+</body>
+</html>

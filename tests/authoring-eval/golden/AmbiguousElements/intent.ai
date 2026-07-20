@@ -1,0 +1,40 @@
+# Test Intent: AmbiguousElements
+
+Site: nordbank-probes
+Requested by: monitoring team
+Date: 2026-07-13
+
+## Target URL
+
+Open the file `probes/ambiguous-elements/index.html`.
+
+## Desired Flow
+
+I opened the product list. Every row has a button labelled "Add to cart". I want
+to add the "Gold Credit Card" specifically. I clicked the "Add to cart" button in
+the Gold Credit Card row, and the cart line updated to show it was added.
+
+## Element Hints
+
+- Several buttons share the exact label "Add to cart" — the test must pick the
+  ONE in the Gold Credit Card row, not just any button with that name.
+
+## Values to Capture
+
+(none)
+
+## Success Criteria
+
+Exactly the Gold Credit Card is added to the cart (the cart shows "gold-card"),
+and no ambiguous-match error occurs.
+
+<!-- ═══════════════════════════════════════════════════════════════
+     DO NOT ALTER THE LINES ABOVE once this document has initiated
+     test development. Only the Lessons Learned section below may be
+     extended by authoring sessions.
+     ═══════════════════════════════════════════════════════════════ -->
+
+## Lessons Learned
+
+<!-- Reserved for authoring sessions. Do not fill this in.
+     Entries below are added automatically from real testing attempts. -->

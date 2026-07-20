@@ -1,0 +1,49 @@
+# Test Intent: <TestName>
+
+Site: <site folder name, e.g. onvista>
+Requested by: <name / team>
+Date: <YYYY-MM-DD>
+
+## Target URL
+
+<the address where the test starts>
+
+## Desired Flow
+
+<Plain-language description of what should happen, step by step.
+Best: the protocol of a manual session you performed yourself —
+"I opened ..., I clicked ..., I typed ..., then I saw ...".
+Be generous with detail; more is better.>
+
+## Element Hints
+
+<Optional. Anything you noticed about the pages that could help:
+button labels, unusual layouts, things that appear only sometimes,
+where on the page things are. You can attach small screenshots of
+elements (crop them tightly around the button/field) and reference
+them here by filename with a leading @, e.g.:
+"the login button looks like @login-button.png".
+Keep the image files next to this document and send them along.>
+
+## Values to Capture
+
+<Optional. Which numbers or values on the pages should be recorded
+each time the check runs (e.g. "the portfolio total in EUR").
+No alert thresholds — those are configured elsewhere.>
+
+## Success Criteria
+
+<What must be true for the check to count as OK. Written by you,
+never edited by the AI. Example: "I am logged in, I can see the
+portfolio page, and the total value is a number greater than zero.">
+
+<!-- ═══════════════════════════════════════════════════════════════
+     DO NOT ALTER THE LINES ABOVE once this document has initiated
+     test development. Only the Lessons Learned section below may be
+     extended by authoring sessions.
+     ═══════════════════════════════════════════════════════════════ -->
+
+## Lessons Learned
+
+<!-- Reserved for authoring sessions. Do not fill this in.
+     Entries below are added automatically from real testing attempts. -->

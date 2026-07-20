@@ -1,0 +1,41 @@
+# Test Intent: Iframe
+
+Site: nordbank-probes
+Requested by: monitoring team
+Date: 2026-07-13
+
+## Target URL
+
+Open the page served at `/index.html` (a small static server hosts this probe so
+the iframe has a real origin).
+
+## Desired Flow
+
+I opened the page. It embeds a "Quick payment" widget inside a frame. I clicked
+the "Confirm payment" button inside that widget, and the widget showed the
+payment was confirmed for €25.00.
+
+## Element Hints
+
+- The button lives INSIDE an iframe (id "widget"). The test must enter the frame
+  to click it — looking only at the top page will not find it.
+
+## Values to Capture
+
+(none)
+
+## Success Criteria
+
+Inside the iframe, the payment is confirmed (the widget shows it was confirmed
+for €25.00).
+
+<!-- ═══════════════════════════════════════════════════════════════
+     DO NOT ALTER THE LINES ABOVE once this document has initiated
+     test development. Only the Lessons Learned section below may be
+     extended by authoring sessions.
+     ═══════════════════════════════════════════════════════════════ -->
+
+## Lessons Learned
+
+<!-- Reserved for authoring sessions. Do not fill this in.
+     Entries below are added automatically from real testing attempts. -->

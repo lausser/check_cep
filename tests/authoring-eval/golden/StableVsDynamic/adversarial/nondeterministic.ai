@@ -1,0 +1,36 @@
+# Test Intent: nondeterministic
+
+Site: nordbank-probes
+Requested by: monitoring team
+Date: 2026-07-13
+
+## Target URL
+
+Open the file `probes/stable-vs-dynamic/index.html`.
+
+## Desired Flow
+
+I opened the account summary and read the session clock. I want the check to
+confirm the exact session time is always the same fixed value.
+
+## Element Hints
+
+- The session clock ticks every second.
+
+## Values to Capture
+
+(none)
+
+## Success Criteria
+
+The session clock always reads exactly "Mon Jan 01 2024 09:00:00" on every run.
+
+<!-- ═══════════════════════════════════════════════════════════════
+     DO NOT ALTER THE LINES ABOVE once this document has initiated
+     test development. Only the Lessons Learned section below may be
+     extended by authoring sessions.
+     ═══════════════════════════════════════════════════════════════ -->
+
+## Lessons Learned
+
+<!-- Reserved for authoring sessions. Do not fill this in. -->

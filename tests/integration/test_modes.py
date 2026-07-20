@@ -8,10 +8,12 @@ SKIP_INTEGRATION=1. Lightpanda mode re-runs the DOM-only fixtures with
 
 import json
 import os
+import subprocess
 
 import pytest
 
 from conftest import run_check_cep, local_test_dir, run_check_cep_s3
+from conftest import _mod as cep, CEP_PLUGIN
 
 
 # ---------------------------------------------------------------------------
@@ -333,3 +335,213 @@ def test_s3(
         assert any("test-meta.json" in k for k in keys), (
             f"[{fixture_name}/s3] test-meta.json not found in cep-reports.\nKeys: {keys}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Authoring mode (spec 020) — --authoring / --gemini-api-key
+# ---------------------------------------------------------------------------
+#
+# The env-injection and mount behaviour is verified at the unit level by
+# building the podman command directly (no container launch). The exit-3
+# refusals and the no-key warning are verified via subprocess against a fake
+# `podman` on PATH so the tests are hermetic and never spawn a real container.
+
+_CONFIG_DEFAULTS = dict(
+    host_name="testhost",
+    service_description="Portfolio",
+    image="check_cep:ai",
+    probe_location="local",
+    test_source="local",
+    result_dest="local",
+    logging="none",
+    test_dir=None,
+    test_artifact=None,
+    result_dir="/tmp/cep-results",
+    testscripts_cache="/tmp/cep-cache",
+    report_retention=None,
+    timeout=60,
+    memory_limit="2g",
+    debug=False,
+    shell=False,
+    authoring=False,
+    gemini_api_key=None,
+    headed=False,
+    vnc=False,
+    browser="chromium",
+    report_url=None,
+    href_target="_blank",
+    registry_username=None,
+    registry_password=None,
+    s3_endpoint=None,
+    aws_access_key_id=None,
+    aws_secret_access_key=None,
+    s3_report_bucket=None,
+    s3_report_path=None,
+    s3_report_url=None,
+    loki_endpoint=None,
+    loki_user=None,
+    loki_password=None,
+    loki_proxy=None,
+    current_status=None,
+)
+
+
+def _make_config(**overrides):
+    base = dict(_CONFIG_DEFAULTS)
+    base.update(overrides)
+    return cep.RunConfig(**base)
+
+
+def _make_ctx(config, omd_root):
+    return cep.RunContext(
+        hostname=config.host_name,
+        servicedescription=config.service_description,
+        testname=f"{config.host_name}/{config.service_description}",
+        testident="testident",
+        container_name="testhost_Portfolio",
+        start_time=0.0,
+        started_str="0",
+        timeout_deadline=0.0,
+        result_dir=config.result_dir,
+        omd_root=omd_root,
+        pid_file="/tmp/cep.pid",
+        config=config,
+    )
+
+
+def _tests_mount(cmd):
+    """Return the podman --volume spec that mounts /home/pwuser/tests."""
+    for i, tok in enumerate(cmd):
+        if tok == "--volume" and ":/home/pwuser/tests:" in cmd[i + 1]:
+            return cmd[i + 1]
+    return None
+
+
+def test_authoring_env_and_mount(tmp_path, monkeypatch):
+    """--authoring injects GEMINI_API_KEY (from arg and from host env) and
+    switches the tests mount to the site-level dir, read-write. Plain --shell
+    and scheduled runs inject no key and keep the read-only mount. Authoring
+    with no resolvable key injects nothing (the warning is emitted in main())."""
+    omd_root = str(tmp_path)
+    site = tmp_path / "etc" / "check_cep" / "tests" / "testhost"
+    site.mkdir(parents=True)
+
+    # Ensure the host env key is controlled per-case.
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+
+    # (1) authoring + --gemini-api-key: key injected, rw site-level mount
+    cfg = _make_config(authoring=True, shell=True, gemini_api_key="arg-key-123")
+    ctx = _make_ctx(cfg, omd_root)
+    env = cep.build_env_vars(ctx)
+    cmd = cep.build_podman_command(ctx, "podman", env)
+    assert env.get("GEMINI_API_KEY") == "arg-key-123"
+    mount = _tests_mount(cmd)
+    assert mount is not None and mount.endswith(":/home/pwuser/tests:rw,z")
+    assert str(site) in mount, f"expected site-level mount, got {mount}"
+
+    # (2) authoring + host env key (no arg): key injected from environment
+    monkeypatch.setenv("GEMINI_API_KEY", "host-env-key-456")
+    cfg = _make_config(authoring=True, shell=True)
+    ctx = _make_ctx(cfg, omd_root)
+    env = cep.build_env_vars(ctx)
+    assert env.get("GEMINI_API_KEY") == "host-env-key-456"
+    # arg takes precedence over host env
+    cfg = _make_config(authoring=True, shell=True, gemini_api_key="arg-wins")
+    assert cep.build_env_vars(_make_ctx(cfg, omd_root)).get("GEMINI_API_KEY") == "arg-wins"
+
+    # (3) authoring + no resolvable key: nothing injected
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    cfg = _make_config(authoring=True, shell=True)
+    assert "GEMINI_API_KEY" not in cep.build_env_vars(_make_ctx(cfg, omd_root))
+
+    # (4) plain --shell (not authoring): no key, read-only service-level mount
+    monkeypatch.setenv("GEMINI_API_KEY", "should-not-leak")
+    cfg = _make_config(shell=True, test_dir=str(tmp_path / "svc"))
+    ctx = _make_ctx(cfg, omd_root)
+    env = cep.build_env_vars(ctx)
+    cmd = cep.build_podman_command(ctx, "podman", env)
+    assert "GEMINI_API_KEY" not in env
+    assert _tests_mount(cmd).endswith(":/home/pwuser/tests:ro,z")
+
+    # (5) scheduled run (no shell/authoring): no key, read-only mount
+    cfg = _make_config(test_dir=str(tmp_path / "svc"))
+    ctx = _make_ctx(cfg, omd_root)
+    env = cep.build_env_vars(ctx)
+    cmd = cep.build_podman_command(ctx, "podman", env)
+    assert "GEMINI_API_KEY" not in env
+    assert _tests_mount(cmd).endswith(":/home/pwuser/tests:ro,z")
+
+
+# --- Subprocess helpers for the refusal / warning paths --------------------
+
+def _fake_podman(tmp_path):
+    """Create a fake `podman` on a bin dir; returns the PATH-prefixed dir.
+
+    Responds to `podman info` with minimal cgroup-v1 YAML and exits 0 for any
+    other subcommand (run/rm/...), so main() completes without a real
+    container.
+    """
+    bin_dir = tmp_path / "fakebin"
+    bin_dir.mkdir(exist_ok=True)
+    podman = bin_dir / "podman"
+    podman.write_text(
+        "#!/bin/sh\n"
+        'case "$1" in\n'
+        '  info) printf "host:\\n  cgroupVersion: v1\\n" ;;\n'
+        "  *) exit 0 ;;\n"
+        "esac\n"
+    )
+    podman.chmod(0o755)
+    return str(bin_dir)
+
+
+def _run_authoring(tmp_path, extra_args, extra_env=None):
+    omd_root = tmp_path / "omd"
+    omd_root.mkdir(exist_ok=True)
+    env = {k: v for k, v in os.environ.items()}
+    env.pop("GEMINI_API_KEY", None)
+    env["OMD_ROOT"] = str(omd_root)
+    env["PATH"] = _fake_podman(tmp_path) + os.pathsep + env["PATH"]
+    if extra_env:
+        env.update(extra_env)
+    cmd = [
+        "python3", str(CEP_PLUGIN),
+        "--host-name", "testhost",
+        "--service-description", "Portfolio",
+        "--image", "check_cep:ai",
+        "--probe-location", "local",
+        "--authoring",
+    ] + extra_args
+    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=60, env=env)
+    return proc.stdout + proc.stderr, proc.returncode
+
+
+def test_authoring_refuses_s3(tmp_path):
+    """--authoring --test-source s3 exits 3 with an actionable message."""
+    out, code = _run_authoring(tmp_path, ["--test-source", "s3"])
+    assert code == 3, out
+    assert "authoring works on a local site workspace" in out
+    assert "test-source s3" in out
+
+
+def test_authoring_refuses_missing_workspace(tmp_path):
+    """--authoring against a non-existent workspace exits 3, naming the dir."""
+    out, code = _run_authoring(tmp_path, [])  # no site dir created under OMD_ROOT
+    assert code == 3, out
+    assert "workspace does not exist" in out
+    assert "etc/check_cep/tests/testhost" in out
+
+
+def test_authoring_no_key_warns_but_starts(tmp_path):
+    """--authoring with no resolvable key still starts (exit 0 via fake podman)
+    but prints a visible not-functional warning and injects nothing."""
+    # Create the site-level workspace so validation passes.
+    site = tmp_path / "omd" / "etc" / "check_cep" / "tests" / "testhost"
+    site.mkdir(parents=True)
+    result_dir = tmp_path / "results"
+    out, code = _run_authoring(
+        tmp_path,
+        ["--result-dir", str(result_dir)],
+    )
+    assert code == 0, out
+    assert "will not be functional" in out

@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Nordbank — Your accounts</title>
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+  <div class="utility-bar">
+    <ul>
+      <li><a href="index.html">Home</a></li>
+      <li><a href="#">Messages</a></li>
+      <li><a href="#">Settings</a></li>
+      <li><a href="login.html">Sign out</a></li>
+    </ul>
+  </div>
+
+  <header class="masthead">
+    <div class="logo">
+      <img src="assets/logo.svg" alt="Nordbank">
+      <span>Nordbank</span>
+    </div>
+    <nav aria-label="Quick links">
+      <a href="#">Move money</a> &nbsp;·&nbsp;
+      <a href="#">Statements</a>
+    </nav>
+  </header>
+
+  <main class="card">
+    <h2>Welcome back</h2>
+
+    <!-- STABLE values: constant across every reload. The account balance is the
+         intended "value to capture" for the flagship golden test. -->
+    <dl class="kv">
+      <dt>Account</dt>
+      <dd id="account-name">Demo Checking Account</dd>
+      <dt>IBAN</dt>
+      <dd id="account-iban">DE89 3704 0044 0532 0130 00</dd>
+      <dt>Available balance</dt>
+      <dd id="account-balance" class="balance">€&nbsp;4,250.00</dd>
+    </dl>
+
+    <!-- DYNAMIC value: a real timestamp from the client clock, different on
+         every load. A good test must NOT assert this literally. -->
+    <p style="color:var(--muted);font-size:13px;">
+      Last login: <span id="last-login">…</span>
+    </p>
+  </main>
+
+  <footer class="footer">
+    <div class="cols">
+      <div>
+        <h4>Accounts</h4>
+        <ul>
+          <li><a href="#">Checking</a></li>
+          <li><a href="#">Savings</a></li>
+          <li><a href="#">Cards</a></li>
+        </ul>
+      </div>
+      <div>
+        <h4>Payments</h4>
+        <ul>
+          <li><a href="#">Transfer</a></li>
+          <li><a href="#">Standing orders</a></li>
+        </ul>
+      </div>
+      <div>
+        <h4>Support</h4>
+        <ul>
+          <li><a href="#">Help centre</a></li>
+          <li><a href="#">Contact</a></li>
+        </ul>
+      </div>
+      <div>
+        <h4>Legal</h4>
+        <ul>
+          <li><a href="#">Privacy</a></li>
+          <li><a href="#">Terms</a></li>
+        </ul>
+      </div>
+    </div>
+  </footer>
+
+  <script>
+    // Dynamic, non-deterministic across loads — deliberately unassertable.
+    document.getElementById('last-login').textContent = new Date().toString();
+  </script>
+</body>
+</html>

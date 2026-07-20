@@ -88,8 +88,9 @@ RUN npx playwright install --with-deps msedge chrome && \
     npm config set color false && \
     npm cache clean --force
 
-# Cleanup npm artifacts
-RUN rm -f package.json package-lock.json
+# Keep package.json/package-lock.json: a self-describing node_modules keeps any
+# later `npm install` (e.g. the ai stage) ADDITIVE. Deleting them orphans the
+# tree, so npm's reification would prune @playwright/test on the next install.
 
 # Copy container-side code
 USER root
@@ -123,12 +124,23 @@ ENV GEMINI_YOLO=true \
 # Gemini CLI version pin (latest stable npm dist-tag, not preview/nightly)
 ARG GEMINI_CLI_VERSION=0.49.0
 
-# AI npm packages (Gemini CLI + playwright-cli)
-ARG AI_NODE_PACKAGES="@google/gemini-cli@${GEMINI_CLI_VERSION} @playwright/cli"
+# chrome-devtools-mcp: live-browser inspection/remote-control tool for the
+# authoring agent (spec 020, research R13). Pinned; authoring image only.
+ARG CHROME_DEVTOOLS_MCP_VERSION=1.5.0
+
+# AI npm packages (Gemini CLI + playwright-cli + chrome-devtools-mcp), installed
+# additively into the same node_modules as the base image. Because the base
+# stage keeps its package.json, @playwright/test and the `playwright` bin the
+# authoring RUN phase needs survive this install. chrome-devtools-mcp is
+# registered below as a Gemini MCP server (Option A): it spawns the
+# Playwright-installed Chrome (the GPU-disable wrapper) headless and isolated so
+# it runs as pwuser in rootless Podman without an unsandboxed or second browser.
+# Exploration is two-tool (chrome-devtools-mcp discovers, @playwright/cli confirms).
+ARG AI_NODE_PACKAGES="@google/gemini-cli@${GEMINI_CLI_VERSION} @playwright/cli chrome-devtools-mcp@${CHROME_DEVTOOLS_MCP_VERSION}"
 RUN mkdir -p /home/pwuser/.gemini && \
-    echo "--- Installing AI Addons locally ---" && \
+    echo "--- Installing AI Addons ---" && \
     npm install $AI_NODE_PACKAGES && \
-    printf '{\n  "security": {\n    "folderTrust": {\n      "enabled": false\n    },\n    "auth": {\n      "selectedType": "gemini-api-key"\n    },\n    "enablePermanentToolApproval": true\n  },\n  "ui": {\n    "showHomeDirectoryWarning": false,\n    "theme": "Default Light",\n    "showCompatibilityWarnings": false\n  },\n  "general": {\n    "defaultApprovalMode": "default"\n  }\n}\n' > /home/pwuser/.gemini/settings.json
+    node -e 'const fs=require("fs");const {chromium}=require("playwright");const chrome=chromium.executablePath();const settings={security:{folderTrust:{enabled:false},auth:{selectedType:"gemini-api-key"},enablePermanentToolApproval:true},ui:{showHomeDirectoryWarning:false,theme:"Default Light",showCompatibilityWarnings:false},general:{defaultApprovalMode:"default"},mcpServers:{"chrome-devtools":{command:"cep-cdp-mcp",args:["--isolated=true","--viewport=1280x720","--executablePath="+chrome,"--chromeArg=--no-sandbox","--chromeArg=--disable-dev-shm-usage"]}}};fs.writeFileSync("/home/pwuser/.gemini/settings.json",JSON.stringify(settings,null,2)+"\n");'
 
 # Install git temporarily; clone playwright-cli skills AND playwright-skill in one layer
 USER root
@@ -142,10 +154,17 @@ RUN apt-get update && apt-get install -y git && \
     rm -rf /tmp/pw-cli /tmp/pw-skill && \
     apt-get purge -y git && apt-get autoremove -y && rm -rf /var/lib/apt/lists/*
 
-# Copy local agent skills (check-cep-vision + sakuli-migration only)
+# Copy local agent skills (check-cep-vision + sakuli-migration + cep-test-authoring)
 COPY --chown=pwuser:pwuser .agents-skills/ /home/pwuser/.agents/skills/
 RUN ln -sf /home/pwuser/.agents/skills /home/pwuser/.gemini/skills/agents && \
     chown -R pwuser:pwuser /home/pwuser
+
+# Authoring-mode operator tools (spec 020): the unattended orchestrator and the
+# shared packaging tool. Siblings of cep_codegen in /home/pwuser/.local/bin.
+# Authoring `ai` image only — the base/scheduled image never ships these.
+COPY image/cep_authoring image/cep_package image/cep-cdp-mcp /home/pwuser/.local/bin/
+RUN chmod 755 /home/pwuser/.local/bin/cep_authoring /home/pwuser/.local/bin/cep_package /home/pwuser/.local/bin/cep-cdp-mcp && \
+    chown pwuser:pwuser /home/pwuser/.local/bin/cep_authoring /home/pwuser/.local/bin/cep_package /home/pwuser/.local/bin/cep-cdp-mcp
 
 USER pwuser
 CMD ["python3", "./run.py"]

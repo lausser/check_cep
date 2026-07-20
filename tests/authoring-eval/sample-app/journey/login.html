@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Nordbank — Sign in</title>
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+  <div class="utility-bar">
+    <ul>
+      <li><a href="index.html">Home</a></li>
+      <li><a href="onlinebanking.html">Online Banking</a></li>
+      <li><a href="#">Help &amp; FAQ</a></li>
+      <li><a href="#">EN / DE</a></li>
+    </ul>
+  </div>
+
+  <header class="masthead">
+    <div class="logo">
+      <img src="assets/logo.svg" alt="Nordbank">
+      <span>Nordbank</span>
+    </div>
+    <nav aria-label="Quick links">
+      <a href="#">Security centre</a>
+    </nav>
+  </header>
+
+  <main class="card">
+    <h2>Sign in to Online Banking</h2>
+    <form id="login-form" novalidate>
+      <label for="username">Username</label>
+      <input type="text" id="username" name="username" autocomplete="username">
+
+      <label for="password">Password</label>
+      <input type="password" id="password" name="password" autocomplete="current-password">
+
+      <button type="submit" id="login-submit" class="primary">Sign in</button>
+
+      <div id="login-error" class="error hidden" role="alert">
+        Sorry, that username or password is incorrect.
+      </div>
+    </form>
+
+    <p style="margin-top:18px;font-size:14px;">
+      <a href="#">Forgot your password?</a> ·
+      <a href="#">Register</a> ·
+      <a href="#">Need help?</a>
+    </p>
+  </main>
+
+  <script>
+    // Dummy credentials. These mirror .env.example (DEMO_USER / DEMO_PASS);
+    // the real deployable package carries them in its own .env. No real secret.
+    var DEMO_USER = 'demo';
+    var DEMO_PASS = 'Passw0rd!';
+
+    document.getElementById('login-form').addEventListener('submit', function (e) {
+      e.preventDefault();
+      var u = document.getElementById('username').value;
+      var p = document.getElementById('password').value;
+      var err = document.getElementById('login-error');
+      if (u === DEMO_USER && p === DEMO_PASS) {
+        // Clear success signal: navigate to the authenticated dashboard.
+        window.location.href = 'dashboard.html';
+      } else {
+        err.classList.remove('hidden');
+      }
+    });
+  </script>
+</body>
+</html>

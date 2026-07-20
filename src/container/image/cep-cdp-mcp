@@ -1,0 +1,16 @@
+#!/bin/bash
+# chrome-devtools-mcp launcher for the authoring agent (spec 020).
+#
+# Runs the AI's exploration browser HEADLESS by default. When HEADED=1 (set by
+# `check_cep --headed`/`--vnc`), it launches VISIBLE so an operator can watch
+# the agent navigate and inspect the live site while it authors the test.
+#
+# Every other MCP argument (executablePath, --isolated, --chromeArg ...) is
+# supplied by the Gemini mcpServers config and forwarded verbatim; only the
+# --headless decision lives here.
+set -euo pipefail
+
+headless=true
+[ "${HEADED:-0}" = "1" ] && headless=false
+
+exec chrome-devtools-mcp --headless="$headless" "$@"

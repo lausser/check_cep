@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Probe — consent on first visit</title>
+  <style>
+    body { font-family: system-ui, Arial, sans-serif; margin: 0; color: #1f2933; }
+    header { padding: 20px; background: #0b3d61; color: #fff; }
+    main { padding: 24px; max-width: 640px; }
+    #open-report { padding: 10px 16px; font-size: 15px; cursor: pointer; }
+    #report { margin-top: 18px; font-weight: 600; }
+    /* Consent overlay — only shown on first visit (no stored flag). */
+    #consent {
+      position: fixed; inset: 0; background: rgba(15,23,32,.55);
+      display: flex; align-items: center; justify-content: center;
+    }
+    #consent .box {
+      background: #fff; padding: 24px; border-radius: 10px; max-width: 420px;
+    }
+    #consent h2 { margin-top: 0; }
+    #consent button { padding: 9px 16px; margin-right: 10px; cursor: pointer; }
+    .hidden { display: none !important; }
+  </style>
+</head>
+<body>
+  <header><strong>Probe:</strong> sometimes-present consent dialog</header>
+  <main>
+    <p>A cookie/consent dialog appears only on a <em>first visit</em> (no stored
+       consent flag). Within the same browser context it never reappears. A robust
+       test must handle "appears sometimes" — dismiss it if present, then proceed.</p>
+    <button id="open-report">Open account report</button>
+    <div id="report" data-opened="false">Report not opened yet.</div>
+  </main>
+
+  <!-- Consent overlay: rendered hidden, revealed by script only when the
+       per-context localStorage flag is absent (a fresh Playwright context). -->
+  <div id="consent" class="hidden" role="dialog" aria-label="Cookie consent">
+    <div class="box">
+      <h2>We value your privacy</h2>
+      <p>We use cookies to improve your experience. Accept to continue.</p>
+      <button id="consent-accept">Accept all</button>
+      <button id="consent-reject">Reject</button>
+    </div>
+  </div>
+
+  <script>
+    var CONSENT_KEY = 'probe-consent-accepted';
+    var consent = document.getElementById('consent');
+
+    // First visit (per context) = no stored flag → show the dialog.
+    if (!localStorage.getItem(CONSENT_KEY)) {
+      consent.classList.remove('hidden');
+    }
+
+    function dismiss() {
+      localStorage.setItem(CONSENT_KEY, '1');
+      consent.classList.add('hidden');
+    }
+    document.getElementById('consent-accept').addEventListener('click', dismiss);
+    document.getElementById('consent-reject').addEventListener('click', dismiss);
+
+    // The real target: only clickable once the overlay is gone (it covers the page).
+    document.getElementById('open-report').addEventListener('click', function () {
+      var r = document.getElementById('report');
+      r.textContent = 'Account report opened: balance €1,204.55';
+      r.setAttribute('data-opened', 'true');
+    });
+  </script>
+</body>
+</html>

@@ -1,0 +1,41 @@
+# Test Intent: StableVsDynamic
+
+Site: nordbank-probes
+Requested by: monitoring team
+Date: 2026-07-13
+
+## Target URL
+
+Open the file `probes/stable-vs-dynamic/index.html`.
+
+## Desired Flow
+
+I opened the account summary. It shows a fixed account number, an available
+balance, and a session clock that ticks every second. I confirmed the account
+number, noted the balance, and saw the clock changing.
+
+## Element Hints
+
+- The account number is fixed. The session clock changes every second, so it must
+  not be checked for a specific value.
+
+## Values to Capture
+
+- The available balance, in EUR (e.g. "3120.75").
+
+## Success Criteria
+
+The account number matches its known fixed value and the balance is a number
+greater than zero. The session clock is shown but must NOT be asserted for a
+specific value.
+
+<!-- ═══════════════════════════════════════════════════════════════
+     DO NOT ALTER THE LINES ABOVE once this document has initiated
+     test development. Only the Lessons Learned section below may be
+     extended by authoring sessions.
+     ═══════════════════════════════════════════════════════════════ -->
+
+## Lessons Learned
+
+<!-- Reserved for authoring sessions. Do not fill this in.
+     Entries below are added automatically from real testing attempts. -->
