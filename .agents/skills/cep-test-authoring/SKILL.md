@@ -149,6 +149,23 @@ possible.
   where the site differed from the described flow goes into the verification
   report and — for site-general findings — into `KNOWLEDGE.md`.
 
+## Worked examples
+
+Before authoring, read the proven exemplars in `examples/` — hand-written
+(intent → ideal test) pairs that show the target shape of a good test:
+
+- **`examples/MultiPageJourney/`** — the flagship **multi-page pattern**: a busy
+  landing page with a non-obvious "Online Banking" entry, an interstitial, a
+  login wall, then a dashboard. Shows targeting non-obvious elements by stable
+  ids amid noise, business-named `test.step()`s, capturing a stable value as
+  perfdata, and never asserting a dynamic value.
+- **`examples/StableVsDynamic/`** — everyday value-capture discipline: assert the
+  stable identity, capture the number as perfdata, leave the ticking clock
+  unasserted.
+
+Each ships a `VERIFICATION.md`. They are verified against the eval sample app in
+`tests/authoring-eval/golden/`.
+
 ## Reuse Conventions
 
 Do not reinvent robustness. The container already ships the sanctioned

@@ -1,0 +1,37 @@
+# Test Intent: incoherent
+
+Site: nordbank
+Requested by: monitoring team
+Date: 2026-07-13
+
+## Target URL
+
+Open the file `journey/index.html`.
+
+## Desired Flow
+
+I opened the landing page, then I completed my tax return, transferred the car to
+my brother, and the submarine surfaced. After that the toaster approved the
+mortgage and I was on the moon. Then I clicked sign in.
+
+## Element Hints
+
+(none — the steps above do not correspond to anything on the pages)
+
+## Values to Capture
+
+(none)
+
+## Success Criteria
+
+Everything described above happened in order.
+
+<!-- ═══════════════════════════════════════════════════════════════
+     DO NOT ALTER THE LINES ABOVE once this document has initiated
+     test development. Only the Lessons Learned section below may be
+     extended by authoring sessions.
+     ═══════════════════════════════════════════════════════════════ -->
+
+## Lessons Learned
+
+<!-- Reserved for authoring sessions. Do not fill this in. -->

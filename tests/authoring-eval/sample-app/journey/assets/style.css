@@ -1,0 +1,134 @@
+/* Shared styling for the fake-bank journey site. Deliberately busy: many links,
+   promos, and footer clutter so the actionable path is buried in realistic
+   noise. No behaviour here — determinism lives in the pages' inline scripts. */
+
+* { box-sizing: border-box; }
+
+:root {
+  --brand: #0b3d61;
+  --brand-accent: #1c7ed6;
+  --ink: #1f2933;
+  --muted: #6b7683;
+  --line: #d9e0e7;
+  --bg: #f4f6f8;
+}
+
+body {
+  margin: 0;
+  font-family: "Segoe UI", Arial, Helvetica, sans-serif;
+  color: var(--ink);
+  background: var(--bg);
+  line-height: 1.45;
+}
+
+a { color: var(--brand-accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+/* Top utility bar — the "onlinebanking" entry hides among these many links. */
+.utility-bar {
+  background: var(--brand);
+  color: #cfe0ee;
+  font-size: 12px;
+}
+.utility-bar ul {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  justify-content: flex-end;
+  margin: 0;
+  padding: 6px 20px;
+  list-style: none;
+}
+.utility-bar a { color: #cfe0ee; }
+.utility-bar a.entry { color: #ffffff; font-weight: 600; }
+
+/* Masthead */
+.masthead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+  background: #fff;
+  border-bottom: 1px solid var(--line);
+}
+.logo { display: flex; align-items: center; gap: 10px; font-weight: 700; color: var(--brand); font-size: 20px; }
+.logo img { width: 36px; height: 36px; }
+
+/* Primary nav */
+.mainnav { background: #fff; border-bottom: 1px solid var(--line); }
+.mainnav ul { display: flex; flex-wrap: wrap; gap: 24px; margin: 0; padding: 12px 20px; list-style: none; }
+.mainnav a { color: var(--ink); font-weight: 600; }
+
+/* Hero */
+.hero {
+  position: relative;
+  padding: 48px 20px;
+  background: linear-gradient(135deg, #0b3d61, #1c7ed6);
+  color: #fff;
+}
+.hero h1 { margin: 0 0 8px; font-size: 30px; }
+.hero p { margin: 0; max-width: 540px; color: #dbeafe; }
+
+/* Promo grid */
+.promos { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; padding: 24px 20px; }
+.promo { background: #fff; border: 1px solid var(--line); border-radius: 8px; padding: 16px; }
+.promo h3 { margin: 0 0 6px; font-size: 16px; }
+.promo p { margin: 0 0 10px; color: var(--muted); font-size: 14px; }
+
+/* Content card (interstitial / login / dashboard) */
+.card {
+  max-width: 460px;
+  margin: 32px auto;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 28px;
+  box-shadow: 0 1px 3px rgba(0,0,0,.06);
+}
+.card h2 { margin-top: 0; color: var(--brand); }
+
+label { display: block; margin: 14px 0 4px; font-size: 14px; font-weight: 600; }
+input[type="text"], input[type="password"] {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  font-size: 15px;
+}
+button.primary {
+  margin-top: 18px;
+  padding: 11px 18px;
+  background: var(--brand-accent);
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+}
+button.primary:hover { background: #1565c0; }
+
+.error {
+  margin-top: 14px;
+  padding: 10px 12px;
+  border-radius: 6px;
+  background: #fdecea;
+  color: #b3261e;
+  border: 1px solid #f5c6cb;
+  font-size: 14px;
+}
+.hidden { display: none; }
+
+/* Dashboard values */
+.kv { display: grid; grid-template-columns: max-content 1fr; gap: 6px 18px; margin: 18px 0; }
+.kv dt { color: var(--muted); font-size: 13px; }
+.kv dd { margin: 0; font-weight: 600; }
+.balance { font-size: 28px; color: var(--brand); }
+
+/* Footer clutter */
+.footer { background: #14232f; color: #9fb0bd; padding: 28px 20px; margin-top: 32px; }
+.footer .cols { display: grid; grid-template-columns: repeat(4, 1fr); gap: 20px; max-width: 960px; }
+.footer h4 { color: #fff; font-size: 14px; margin: 0 0 8px; }
+.footer ul { list-style: none; margin: 0; padding: 0; font-size: 13px; }
+.footer li { margin: 4px 0; }
+.footer a { color: #9fb0bd; }

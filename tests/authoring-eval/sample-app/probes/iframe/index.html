@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Probe — iframe-embedded content</title>
+  <style>
+    body { font-family: system-ui, Arial, sans-serif; margin: 0; color: #1f2933; }
+    header { padding: 20px; background: #0b3d61; color: #fff; }
+    main { padding: 24px; max-width: 720px; }
+    iframe { width: 100%; height: 220px; border: 1px solid #d9e0e7; border-radius: 8px; }
+  </style>
+</head>
+<body>
+  <header><strong>Probe:</strong> the target lives inside an iframe</header>
+  <main>
+    <p>The payment widget below is a <em>same-origin</em> iframe. The test must
+       enter the frame (<code>page.frameLocator</code>) to actuate its button and
+       read its result — targeting the top document will not find it. Served over
+       HTTP so parent and frame share a real origin (see research R7).</p>
+
+    <!-- Same-origin child; requires an HTTP origin (webServer in the config). -->
+    <iframe id="widget" src="frame.html" title="Payment widget"></iframe>
+  </main>
+</body>
+</html>

@@ -1,0 +1,40 @@
+# Test Intent: ResponsiveBreakpoint
+
+Site: nordbank-probes
+Requested by: monitoring team
+Date: 2026-07-13
+
+## Target URL
+
+Open the file `probes/responsive-breakpoint/index.html`.
+
+## Desired Flow
+
+I opened the page in a normal desktop-sized window. The "Transfer money" button
+was visible. I clicked it and the page confirmed the transfer had started.
+
+## Element Hints
+
+- At a desktop viewport the primary "Transfer money" button is visible; at a
+  narrow width it collapses into a hamburger menu. The check runs at the standard
+  desktop viewport, so the desktop button should be used.
+
+## Values to Capture
+
+(none)
+
+## Success Criteria
+
+The "Transfer money" button is visible at the desktop viewport, and clicking it
+shows the transfer has started.
+
+<!-- ═══════════════════════════════════════════════════════════════
+     DO NOT ALTER THE LINES ABOVE once this document has initiated
+     test development. Only the Lessons Learned section below may be
+     extended by authoring sessions.
+     ═══════════════════════════════════════════════════════════════ -->
+
+## Lessons Learned
+
+<!-- Reserved for authoring sessions. Do not fill this in.
+     Entries below are added automatically from real testing attempts. -->

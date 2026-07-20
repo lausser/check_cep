@@ -1,0 +1,38 @@
+# Test Intent: AsyncLoading
+
+Site: nordbank-probes
+Requested by: monitoring team
+Date: 2026-07-13
+
+## Target URL
+
+Open the file `probes/async-loading/index.html`.
+
+## Desired Flow
+
+I opened the page. It first showed "Loading your balance…", then after a short
+moment the balance appeared. I read the balance once it had loaded.
+
+## Element Hints
+
+- The balance loads after a short, variable delay. The test should wait for the
+  balance to appear (wait on its state), not wait a fixed number of seconds.
+
+## Values to Capture
+
+- The available balance, in EUR (e.g. "8640.00").
+
+## Success Criteria
+
+Once loading finishes, the balance is visible and is a number greater than zero.
+
+<!-- ═══════════════════════════════════════════════════════════════
+     DO NOT ALTER THE LINES ABOVE once this document has initiated
+     test development. Only the Lessons Learned section below may be
+     extended by authoring sessions.
+     ═══════════════════════════════════════════════════════════════ -->
+
+## Lessons Learned
+
+<!-- Reserved for authoring sessions. Do not fill this in.
+     Entries below are added automatically from real testing attempts. -->

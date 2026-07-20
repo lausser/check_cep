@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" width="48" height="48" role="img" aria-label="Nordbank logo">
+  <rect width="48" height="48" rx="8" fill="#0b3d61"/>
+  <path d="M12 34V14l12 9 12-9v20" fill="none" stroke="#1c7ed6" stroke-width="3" stroke-linejoin="round" stroke-linecap="round"/>
+  <circle cx="24" cy="30" r="3" fill="#ffffff"/>
+</svg>

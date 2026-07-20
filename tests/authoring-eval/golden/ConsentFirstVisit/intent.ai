@@ -1,0 +1,43 @@
+# Test Intent: ConsentFirstVisit
+
+Site: nordbank-probes
+Requested by: monitoring team
+Date: 2026-07-13
+
+## Target URL
+
+Open the file `probes/consent-first-visit/index.html`.
+
+## Desired Flow
+
+I opened the page. On my first visit a cookie/consent dialog covered the page. I
+clicked "Accept all" and it went away. Then I clicked "Open account report" and
+saw the report text appear. When I revisited in the same browser session the
+dialog did NOT appear again — it only shows on a first visit.
+
+## Element Hints
+
+- The consent dialog appears only on a first visit (it is remembered afterwards),
+  so the test must cope with it being present OR absent — dismiss it if it is
+  there, then continue.
+- The report button is labelled "Open account report".
+
+## Values to Capture
+
+(none)
+
+## Success Criteria
+
+The account report is opened (its text is shown), regardless of whether the
+consent dialog happened to appear this time.
+
+<!-- ═══════════════════════════════════════════════════════════════
+     DO NOT ALTER THE LINES ABOVE once this document has initiated
+     test development. Only the Lessons Learned section below may be
+     extended by authoring sessions.
+     ═══════════════════════════════════════════════════════════════ -->
+
+## Lessons Learned
+
+<!-- Reserved for authoring sessions. Do not fill this in.
+     Entries below are added automatically from real testing attempts. -->

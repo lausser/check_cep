@@ -1320,3 +1320,23 @@ To confirm on a production host: the deployed check runs green with
 `GEMINI_API_KEY` unset, and the plugin never adds a `GEMINI_API_KEY=…`
 `--env` to the podman command outside authoring mode (covered by the
 authoring env-injection tests in `tests/integration/test_modes.py`).
+
+### Evaluating the authoring workflow (spec 021)
+
+The authoring workflow is exercised against a self-contained, deterministic
+**sample app** and hand-written **golden pairs** under `tests/authoring-eval/`:
+
+- `sample-app/` — a realistic multi-page fake-bank journey plus eight isolated
+  hard-case probe routes (consent, ambiguous elements, no stable locator,
+  stable-vs-dynamic values, async loading, responsive breakpoint, iframe,
+  moving element). See `sample-app/README.md` for the hard-case catalogue.
+- `golden/<Capability>/` — proven `(intent → ideal test)` pairs; the ideal
+  tests pass deterministically offline (no AI, no cost).
+
+A **gated behavioural eval** (`tests/integration/test_authoring_eval.py`) runs
+the real `cep_authoring` orchestrator against the sample app and asserts
+capability *outcomes* — never the generated source text. It is gated **solely
+on the presence of `GEMINI_API_KEY`**: unset ⇒ every case skips and the fast
+suite stays green; set ⇒ the cases run (use `-m "not authoring_eval"` to
+exclude). See `tests/authoring-eval/README.md` for the offline and gated run
+recipes (including the headed + `CEP_SLOW_MO` watch mode).

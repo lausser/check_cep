@@ -6,6 +6,113 @@ available in the next container image build.
 
 ---
 
+## Spec 021 — AI Test-Authoring Hardening
+
+**Branch**: `021-ai-test-hardening`
+
+### Summary
+
+Proves — and keeps proving — that the spec-020 authoring workflow reliably
+produces *good*, deterministic tests for *hard*, realistic pages. Purely
+additive: no host-plugin execution path, container I/O contract, or
+deployed-check behaviour changes.
+
+### Verification status (read before relying on SC-002)
+
+**The full gated eval has NOT been run to completion — there is no sufficient
+model-token budget available.** What is and is not verified:
+
+- **Verified (offline, no AI, reproducible):** the sample app (10/10 smoke
+  tests), all 9 golden ideal tests, the `GEMINI_API_KEY` gating in both
+  directions (12/12 cases skip with the key unset; suite green), intent
+  PREFLIGHT for all 12 intents, and the `cep_authoring` orchestrator tests.
+- **Verified (live, with AI):** the workflow explored the journey site and
+  authored a good deterministic test into the correct workspace on iteration 1 —
+  business-named steps, role-based locators for the non-obvious navigation,
+  stable values asserted, the requested balance emitted as perfdata, the dynamic
+  "Last login" deliberately *not* asserted — plus `KNOWLEDGE.md` and
+  `VERIFICATION.md`. The shipped skill exemplars were demonstrably read and used.
+- **NOT verified:** the complete positive-path property set (SC-002) and the
+  adversarial cases (SC-003). No package was produced end-to-end, because a run
+  exhausts the free-tier cap (`generate_content_free_tier_input_token_count`,
+  250 000/day) during exploration — even a clean, single-iteration run. This is a
+  **budget** limit, not a known defect: the two bugs that previously caused
+  runaway iteration were found and fixed (see *Fixed*).
+
+To complete verification, supply a paid key (or a cheaper provider) and run
+`pytest -m authoring_eval tests/integration/test_authoring_eval.py -v`. The
+harness classifies quota exhaustion as a `skip`, so it never reports a false
+regression when the budget runs out.
+
+### Added
+
+- **Deterministic sample app** under `tests/authoring-eval/sample-app/`: a
+  realistic, distraction-rich multi-page fake-bank **journey site**
+  (landing → non-obvious "Online Banking" entry → interstitial → login →
+  dashboard, no login form on the landing page) plus eight isolated
+  single-difficulty **probe routes** (consent-first-visit, ambiguous-elements,
+  no-stable-locator, stable-vs-dynamic, async-loading, responsive-breakpoint,
+  iframe, moving-element). Served via `file://` (relative links); the iframe
+  probe is the one HTTP-served exception. A hard-case catalogue maps each
+  difficulty → route → 020 FR guarded → golden pair.
+- **Golden intent→test pairs** in `tests/authoring-eval/golden/<Capability>/`
+  (flagship `MultiPageJourney` + one per probe): a human-written `intent.ai`,
+  the *ideal* deterministic Playwright test, config, functions, and
+  `VERIFICATION.md`. Every ideal test passes deterministically offline. The
+  best two (flagship + `StableVsDynamic`) ship as skill few-shot **exemplars**
+  under `.agents/skills/cep-test-authoring/examples/`, referenced from
+  `SKILL.md`.
+- **Gated behavioural eval** (`tests/integration/test_authoring_eval.py` +
+  `authoring_eval_support.py`): runs the real `cep_authoring` against the
+  sample app and asserts capability *outcomes* — package produced, ≥2
+  deterministic passes, critic pass, requested values emitted as perfdata, no
+  secret outside `.env`, `VERIFICATION.md` complete, and a per-capability
+  behavioural signal — **never** the generated source text (SC-008). Gated
+  **solely on the presence of `GEMINI_API_KEY`** (plus an AI-image skipif); the
+  `authoring_eval` marker is for selection only.
+- **Adversarial cases** (incoherent / unsatisfiable / nondeterministic intents):
+  assert the workflow refuses or flags the conflict and never fabricates a
+  passing test (SC-003).
+
+### Changed
+
+- `src/container/image/cep_authoring`: additive per-run **metrics** record
+  (`<TestName>-metrics.json`: iterations, model turns, wall seconds, outcome,
+  pinned model) written at STOP/PACKAGE; an optional **slow-motion** verification
+  RUN wrapper (`CEP_SLOW_MO` + `HEADED=1`, mirrors `run.py`) that never touches
+  the packaged test's config; model pin recorded (`gemini-3.1-flash-lite`).
+- `tests/integration/conftest.py`: registers the `authoring_eval` marker and the
+  reusable `requires_gemini_key` / `requires_ai_image` skips.
+
+### Fixed
+
+- **`cep_authoring` authored into the wrong directory** (found by this spec's eval
+  on its first real run). The AUTHOR prompt passed a *relative* folder
+  (`$TESTNAME/`), but the model inherits the orchestrator's cwd — `/home/pwuser`
+  when launched as `podman run … cep_authoring`, not the workspace mount
+  `/home/pwuser/tests`. The AI therefore wrote a complete, good test to the
+  ephemeral container filesystem while `$TESTDIR` stayed empty, so the RUN phase
+  found no tests, never reached a clean-run streak, and burned every iteration
+  without producing a package. Fixed by running gemini from `$WORKSPACE` and
+  passing **absolute** paths (plus naming the workspace root in the prompt); the
+  `cd` also makes gemini's own sandbox reject stray writes instead of silently
+  accepting them.
+- **`cep_authoring` failed silently on an unwritable workspace.** `mkdir -p
+  "$TESTDIR"` was unchecked, so a mount the container user cannot write (the
+  usual rootless-podman uid mismatch) surfaced as "no clean runs" after burning
+  the whole iteration budget. It now fails fast with an actionable message and
+  aborts the loop instead of retrying an unfixable condition.
+- Eval harness: mounts the workspace with
+  `--userns=keep-id:uid=1001,gid=1001` + `--security-opt label=disable`,
+  mirroring `check_cep`'s own `--authoring` flags, so the in-container user can
+  actually write to it.
+- Eval harness: a hung `cep_authoring` now reports as a classified `timeout`
+  failure instead of an opaque harness error (and as `quota_error` — a skip —
+  when the stall is model-quota backoff), and the named container is
+  force-removed (killing the `podman` CLI otherwise leaves it running).
+
+---
+
 ## Spec 020 — AI-Assisted Test Authoring
 
 **Branch**: `020-ai-test-authoring`

@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Probe — ambiguous elements</title>
+  <style>
+    body { font-family: system-ui, Arial, sans-serif; margin: 0; color: #1f2933; }
+    header { padding: 20px; background: #0b3d61; color: #fff; }
+    main { padding: 24px; max-width: 720px; }
+    .product {
+      display: flex; align-items: center; justify-content: space-between;
+      border: 1px solid #d9e0e7; border-radius: 8px; padding: 14px 16px; margin: 10px 0;
+    }
+    .product h3 { margin: 0; font-size: 16px; }
+    .product .price { color: #6b7683; font-size: 14px; }
+    button.add { padding: 8px 14px; cursor: pointer; }
+    #cart { margin-top: 18px; font-weight: 600; }
+  </style>
+</head>
+<body>
+  <header><strong>Probe:</strong> several look-alike "Add to cart" buttons</header>
+  <main>
+    <p>Every row has a button labelled <em>Add to cart</em>. A naive
+       <code>getByRole('button', {name: 'Add to cart'})</code> matches many nodes
+       (strict-mode violation). The test must disambiguate to exactly one — e.g.
+       scope by the product row / its stable <code>data-product</code>.</p>
+
+    <div class="product" data-product="everyday-checking">
+      <div><h3>Everyday Checking</h3><div class="price">€0 / month</div></div>
+      <button class="add" data-product="everyday-checking">Add to cart</button>
+    </div>
+    <div class="product" data-product="gold-card">
+      <div><h3>Gold Credit Card</h3><div class="price">€9 / month</div></div>
+      <button class="add" data-product="gold-card">Add to cart</button>
+    </div>
+    <div class="product" data-product="travel-insurance">
+      <div><h3>Travel Insurance</h3><div class="price">€4 / month</div></div>
+      <button class="add" data-product="travel-insurance">Add to cart</button>
+    </div>
+    <div class="product" data-product="savings-plus">
+      <div><h3>Savings Plus</h3><div class="price">1.8% p.a.</div></div>
+      <button class="add" data-product="savings-plus">Add to cart</button>
+    </div>
+
+    <div id="cart" data-added="">Cart is empty.</div>
+  </main>
+
+  <script>
+    document.querySelectorAll('button.add').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        var product = btn.getAttribute('data-product');
+        var cart = document.getElementById('cart');
+        cart.textContent = 'Added: ' + product;
+        cart.setAttribute('data-added', product);
+      });
+    });
+  </script>
+</body>
+</html>

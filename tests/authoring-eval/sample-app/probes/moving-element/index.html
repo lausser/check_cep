@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Probe — moving element</title>
+  <style>
+    body { font-family: system-ui, Arial, sans-serif; margin: 0; color: #1f2933; }
+    header { padding: 20px; background: #0b3d61; color: #fff; }
+    main { padding: 24px; }
+    #arena { position: relative; height: 460px; border: 1px dashed #d9e0e7; border-radius: 8px; margin-top: 16px; }
+    #target { position: absolute; cursor: pointer; }
+    #status { margin-top: 12px; font-weight: 700; }
+  </style>
+</head>
+<body>
+  <header><strong>Probe:</strong> the target moves between visits (seeded)</header>
+  <main>
+    <p>The badge moves to a new spot on every load, following a fixed seeded
+       sequence keyed off a <code>localStorage</code> counter — reproducible given
+       state, but never at the same coordinates twice in a row. Absolute-position
+       or brittle CSS-path clicks break; the sanctioned image/best-effort fallback
+       locates it wherever it lands.</p>
+
+    <div id="arena">
+      <!-- No stable position; drawn as a solid, font-independent badge so an
+           image template matches it wherever the seeded sequence places it. -->
+      <canvas id="target" width="64" height="64"></canvas>
+    </div>
+    <div id="status" data-caught="false">Not caught yet.</div>
+  </main>
+
+  <script>
+    // Deterministic PRNG (mulberry32): fixed base seed advanced by a persisted
+    // per-context load counter. Fresh context → counter 0 → reproducible first
+    // position; each reload advances the sequence, so the badge "moves".
+    function mulberry32(a) {
+      return function () {
+        a |= 0; a = (a + 0x6D2B79F5) | 0;
+        var t = Math.imul(a ^ (a >>> 15), 1 | a);
+        t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+        return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+      };
+    }
+    var counter = parseInt(localStorage.getItem('probe-move-counter') || '0', 10);
+    localStorage.setItem('probe-move-counter', String(counter + 1));
+
+    var rng = mulberry32(0x9E3779B1 + counter);
+    var arena = document.getElementById('arena');
+    var target = document.getElementById('target');
+    var maxX = 900 - 64, maxY = 460 - 64;
+    target.style.left = Math.floor(rng() * maxX) + 'px';
+    target.style.top = Math.floor(rng() * maxY) + 'px';
+
+    // Solid, distinctive diamond badge — no text, so image matching is stable.
+    var ctx = target.getContext('2d');
+    ctx.fillStyle = '#e8590c';
+    ctx.beginPath();
+    ctx.moveTo(32, 4); ctx.lineTo(60, 32); ctx.lineTo(32, 60); ctx.lineTo(4, 32);
+    ctx.closePath(); ctx.fill();
+    ctx.fillStyle = '#fff';
+    ctx.beginPath(); ctx.arc(32, 32, 10, 0, Math.PI * 2); ctx.fill();
+
+    target.addEventListener('click', function () {
+      var s = document.getElementById('status');
+      s.textContent = 'Caught the badge!';
+      s.setAttribute('data-caught', 'true');
+    });
+  </script>
+</body>
+</html>

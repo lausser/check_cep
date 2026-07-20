@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Probe — no stable locator</title>
+  <style>
+    body { font-family: system-ui, Arial, sans-serif; margin: 0; color: #1f2933; }
+    header { padding: 20px; background: #0b3d61; color: #fff; }
+    main { padding: 24px; max-width: 900px; }
+    /* The control sits alone in an open panel — like a real media player — with
+       a wrapper whose class is randomised and no id/role on the click target,
+       so there is no stable DOM handle to grab. */
+    #panel {
+      position: relative; height: 320px; margin-top: 16px;
+      border: 1px solid #d9e0e7; border-radius: 8px; background: #fff;
+      display: flex; align-items: center; justify-content: center;
+    }
+    canvas { display: block; cursor: pointer; }
+    #status { margin-top: 12px; font-weight: 600; }
+  </style>
+</head>
+<body>
+  <header><strong>Probe:</strong> icon-only canvas control (image fallback)</header>
+  <main>
+    <p>The "play" control below is drawn on a <code>&lt;canvas&gt;</code> — there
+       is no text, role, or stable class/id to target. The wrapper's classes are
+       randomised per load. The sanctioned approach is an image-template match
+       (<code>vision.clickByImage</code>) against a tight crop of the icon.</p>
+
+    <div id="panel">
+      <!-- canvas has NO id; the wrapper class is randomised each load -->
+      <span class="ctl"><canvas width="96" height="96"></canvas></span>
+    </div>
+    <div id="status" data-activated="false">Idle</div>
+  </main>
+
+  <script>
+    // Randomise the wrapper class so no stable selector exists.
+    var wrapper = document.querySelector('#panel .ctl');
+    wrapper.className = 'ctl x' + Math.floor(Math.random() * 1e9).toString(36);
+
+    // A sharp, high-contrast "play" badge — orange diamond with a white inner
+    // disc on a transparent background. Sharp corners + strong colour give the
+    // image template a reliable, unambiguous match (font-independent).
+    var canvas = document.querySelector('#panel canvas');
+    var ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#e8590c';
+    ctx.beginPath();
+    ctx.moveTo(48, 6); ctx.lineTo(90, 48); ctx.lineTo(48, 90); ctx.lineTo(6, 48);
+    ctx.closePath(); ctx.fill();
+    ctx.fillStyle = '#ffffff';
+    ctx.beginPath(); ctx.arc(48, 48, 15, 0, Math.PI * 2); ctx.fill();
+    // White play triangle inside the disc so it reads as a control, not a gem.
+    ctx.fillStyle = '#e8590c';
+    ctx.beginPath();
+    ctx.moveTo(43, 40); ctx.lineTo(43, 56); ctx.lineTo(57, 48);
+    ctx.closePath(); ctx.fill();
+
+    canvas.addEventListener('click', function () {
+      var s = document.getElementById('status');
+      s.textContent = 'Playing';
+      s.setAttribute('data-activated', 'true');
+    });
+  </script>
+</body>
+</html>

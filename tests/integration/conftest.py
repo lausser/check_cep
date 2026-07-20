@@ -27,6 +27,50 @@ CEP_IMAGE = os.environ.get("CEP_IMAGE", "check_cep:test")
 CEP_PLUGIN = Path(__file__).parent.parent.parent / "src" / "check_cep"
 _FIXTURES_DIR = Path(__file__).parent.parent / "fixtures"
 
+# ---------------------------------------------------------------------------
+# AI test-authoring evaluation gate (spec 021)
+# ---------------------------------------------------------------------------
+# The gated behavioural eval (test_authoring_eval.py) is gated SOLELY on the
+# presence of GEMINI_API_KEY (clarification 2026-07-13) — no separate opt-in
+# flag. The `authoring_eval` marker is for selection convenience only, NOT the
+# gate. A second skipif guards on the AI image being present.
+
+CEP_AI_IMAGE = os.environ.get("CEP_AI_IMAGE", "localhost/check_cep:ai-latest")
+
+requires_gemini_key = pytest.mark.skipif(
+    not os.environ.get("GEMINI_API_KEY"),
+    reason="GEMINI_API_KEY not set — authoring eval is gated on its presence",
+)
+
+
+def _ai_image_present(image=CEP_AI_IMAGE):
+    """True if the AI container image exists locally (podman image inspect)."""
+    try:
+        proc = subprocess.run(
+            ["podman", "image", "exists", image],
+            capture_output=True,
+            timeout=30,
+        )
+        return proc.returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+requires_ai_image = pytest.mark.skipif(
+    not _ai_image_present(),
+    reason=f"AI image {CEP_AI_IMAGE!r} not present — build it with `make image-ai`",
+)
+
+
+def pytest_configure(config):
+    """Register the authoring_eval marker (selection only, not the gate)."""
+    config.addinivalue_line(
+        "markers",
+        "authoring_eval: gated behavioural eval of the AI test-authoring "
+        "workflow (spec 021). Gated on GEMINI_API_KEY presence; use "
+        "-m 'not authoring_eval' to exclude.",
+    )
+
 # Spectate mode: run browsers headed so a human can watch the tests.
 # Set CEP_SPECTATE=1 to enable.  Injects --headed, slower highlight
 # timings, and Playwright slowMo so the spectator's eyes can follow.

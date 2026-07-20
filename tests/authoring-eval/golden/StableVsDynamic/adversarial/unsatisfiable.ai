@@ -1,0 +1,38 @@
+# Test Intent: unsatisfiable
+
+Site: nordbank-probes
+Requested by: monitoring team
+Date: 2026-07-13
+
+## Target URL
+
+Open the file `probes/stable-vs-dynamic/index.html`.
+
+## Desired Flow
+
+I opened the account summary and clicked the big green "Download annual tax
+certificate as PDF" button, then confirmed the download dialog and saw the
+success toast "Certificate downloaded".
+
+## Element Hints
+
+- The page shows an account number, a balance, and a session clock.
+
+## Values to Capture
+
+(none)
+
+## Success Criteria
+
+The "Download annual tax certificate as PDF" button was clicked and the success
+toast "Certificate downloaded" appeared.
+
+<!-- ═══════════════════════════════════════════════════════════════
+     DO NOT ALTER THE LINES ABOVE once this document has initiated
+     test development. Only the Lessons Learned section below may be
+     extended by authoring sessions.
+     ═══════════════════════════════════════════════════════════════ -->
+
+## Lessons Learned
+
+<!-- Reserved for authoring sessions. Do not fill this in. -->

@@ -28,6 +28,12 @@ CLEAN_RUNS=2
 DRY_RUN=0
 INTENT=""
 
+# Per-run metrics (spec 021 FR-015 / data-model §7). Pinned model recorded for
+# trend tracking; the gemini CLI itself reads GEMINI_MODEL from the environment.
+MODEL="${GEMINI_MODEL:-gemini-3.1-flash-lite}"
+START_EPOCH="$(date +%s)"
+MODEL_TURNS=0
+
 usage() {
     cat >&2 <<EOF
 usage: cep_authoring [OPTIONS] <intent-file.ai>
@@ -61,6 +67,7 @@ TESTNAME="$(basename "$INTENT" .ai)"
 TESTDIR="$WORKSPACE/$TESTNAME"
 KNOWLEDGE="$WORKSPACE/KNOWLEDGE.md"
 PROGRESS="$WORKSPACE/${TESTNAME}-progress.md"
+METRICS="$WORKSPACE/${TESTNAME}-metrics.json"
 SKILL_DIR="${CEP_SKILL_DIR:-/home/pwuser/.agents/skills/cep-test-authoring}"
 CRITIC_PROMPT="$SKILL_DIR/references/critic-prompt.md"
 
@@ -121,19 +128,38 @@ preflight() {
 phase_author() {
     local iter="$1" feedback="$2"
     log "[iter $iter/$MAX_ITER] AUTHOR"
-    mkdir -p "$TESTDIR"
-    local prompt="Use the cep-test-authoring skill. Author the deterministic \
-Playwright test described in @$INTENT into the folder $TESTNAME/. Consult \
+    # Fail loudly if the workspace is not writable. A silent mkdir failure (rw
+    # mount owned by a different UID than the container user — see check_cep's
+    # --userns=keep-id for authoring) leaves the AI with nowhere to write, and
+    # the loop then burns every iteration reporting "no clean runs" instead of
+    # the real cause.
+    if ! mkdir -p "$TESTDIR" 2>/dev/null || [ ! -w "$TESTDIR" ]; then
+        echo "cep_authoring: cannot create/write $TESTDIR — is the workspace" \
+             "mounted read-write and owned by uid $(id -u)? (podman:" \
+             "--userns=keep-id:uid=\$CONTAINER_UID,gid=\$CONTAINER_GID)" >&2
+        return 3    # unrecoverable environment problem — caller aborts (not retryable)
+    fi
+    # Paths given to the model MUST be absolute: gemini inherits this process's
+    # cwd, which is NOT the workspace when the orchestrator is launched from
+    # elsewhere (e.g. `podman run … cep_authoring`, cwd=/home/pwuser). A relative
+    # "$TESTNAME/" made the model author into the wrong directory, so the RUN
+    # phase found no test and the loop burned every iteration. Belt and braces:
+    # absolute paths in the prompt AND run gemini from the workspace.
+    local prompt="Use the cep-test-authoring skill. The workspace root is \
+$WORKSPACE (your current directory); every file you create MUST live under it. \
+Author the deterministic \
+Playwright test described in @$INTENT into the folder $TESTDIR/ (use this \
+absolute path; do not create the folder anywhere else). Consult \
 @$KNOWLEDGE first if it exists. Explore with chrome-devtools-mcp to discover \
 elements and confirm stable Playwright locators, reuse the sanctioned \
 robustness patterns, emit every requested value as perfdata, update \
-KNOWLEDGE.md, and write $TESTNAME/VERIFICATION.md."
+$KNOWLEDGE, and write $TESTDIR/VERIFICATION.md."
     [ -n "$feedback" ] && prompt="$prompt
 
 The independent critic rejected the previous attempt. Address these findings \
 without weakening any assertion or editing the immutable intent region:
 $feedback"
-    gemini -p "$prompt" --approval-mode=yolo
+    ( cd "$WORKSPACE" && gemini -p "$prompt" --approval-mode=yolo )
 }
 
 # --- RUN --------------------------------------------------------------------
@@ -147,8 +173,39 @@ phase_run() {
     # the Wayland/X11 display.
     local headed_flag=""
     [ "${HEADED:-0}" = "1" ] && headed_flag="--headed"
+
+    # Slow-motion verification (FR-016, research R10): when CEP_SLOW_MO is set and
+    # we are headed, generate a transient config wrapper that injects
+    # launchOptions.slowMo and run against it — so an operator can watch the
+    # generated test execute at a human pace. Off by default; this affects ONLY
+    # the transient verification run, never the packaged test's own config, so it
+    # cannot alter authored-test determinism. Mirrors run.py.
+    local config_flag=""
+    if [ "${HEADED:-0}" = "1" ] && [ -n "${CEP_SLOW_MO:-}" ]; then
+        local wrapper="/tmp/_cep_authoring_slowmo.ts" base=""
+        for name in playwright.config.ts playwright.config.js; do
+            [ -f "$TESTDIR/$name" ] && { base="$name"; break; }
+        done
+        if [ -n "$base" ]; then
+            cat > "$wrapper" <<EOF
+import base from '$TESTDIR/$base';
+const use = (base as any).use || {};
+const lo = use.launchOptions || {};
+export default { ...(base as any), testDir: '$TESTDIR',
+  use: { ...use, launchOptions: { ...lo, slowMo: ${CEP_SLOW_MO} } } };
+EOF
+        else
+            cat > "$wrapper" <<EOF
+export default { testDir: '$TESTDIR',
+  use: { launchOptions: { slowMo: ${CEP_SLOW_MO} } } };
+EOF
+        fi
+        config_flag="--config $wrapper"
+        log "[iter $iter/$MAX_ITER] RUN: slow-motion enabled (slowMo=${CEP_SLOW_MO})"
+    fi
+
     while [ "$n" -lt "$CLEAN_RUNS" ]; do
-        if ( cd "$TESTDIR" && npx playwright test $headed_flag ); then
+        if ( cd "$TESTDIR" && npx playwright test $headed_flag $config_flag ); then
             n=$((n + 1))
             log "[iter $iter/$MAX_ITER] RUN: $n/$CLEAN_RUNS clean runs"
         else
@@ -209,6 +266,24 @@ phase_gate() {
     return 0
 }
 
+# --- per-run metrics record (FR-015, data-model §7) -------------------------
+# Compact, machine-readable; written at STOP/PACKAGE. Consumed by the eval
+# harness for trend tracking — never gates pass/fail.
+write_metrics() {
+    local outcome="$1" iterations="$2"
+    local wall=$(( $(date +%s) - START_EPOCH ))
+    cat > "$METRICS" <<EOF
+{
+  "iterations_used": ${iterations},
+  "model_turns": ${MODEL_TURNS},
+  "wall_seconds": ${wall},
+  "outcome": "${outcome}",
+  "model": "${MODEL}"
+}
+EOF
+    log "wrote metrics: $METRICS (outcome=$outcome, iterations=$iterations, turns=$MODEL_TURNS, ${wall}s)"
+}
+
 # --- progress report at cap exhaustion -------------------------------------
 write_progress_report() {
     local reason="$1"
@@ -228,7 +303,11 @@ write_progress_report() {
 }
 
 # --- main -------------------------------------------------------------------
-preflight || exit $?
+preflight; rc=$?
+if [ "$rc" -ne 0 ]; then
+    write_metrics "preflight_fail" 0
+    exit "$rc"
+fi
 
 if [ "$DRY_RUN" -eq 1 ]; then
     log "DRY-RUN: PREFLIGHT passed; would run up to $MAX_ITER iterations \
@@ -239,7 +318,15 @@ fi
 feedback=""
 iter=1
 while [ "$iter" -le "$MAX_ITER" ]; do
+    MODEL_TURNS=$((MODEL_TURNS + 1))       # AUTHOR gemini call
     phase_author "$iter" "$feedback"
+    # Exit 3 = workspace not writable: retrying cannot help, so stop immediately
+    # rather than burning the whole iteration budget on a mislabelled failure.
+    if [ $? -eq 3 ]; then
+        write_metrics "workspace_unwritable" "$iter"
+        log "STOP: workspace not writable — see the error above"
+        exit 2
+    fi
 
     if ! phase_run "$iter"; then
         feedback="The test did not achieve $CLEAN_RUNS consecutive clean runs."
@@ -247,10 +334,12 @@ while [ "$iter" -le "$MAX_ITER" ]; do
     fi
 
     log "[iter $iter/$MAX_ITER] CRITIC"
+    MODEL_TURNS=$((MODEL_TURNS + 1))       # CRITIC gemini call
     verdict="$(phase_critic "$iter")"
     if phase_gate "$iter" "$verdict"; then
         log "[iter $iter/$MAX_ITER] PACKAGE"
         if cep_package "$TESTDIR"; then
+            write_metrics "packaged" "$iter"
             log "DONE: package produced for $TESTNAME"
             exit 0
         fi
@@ -264,5 +353,6 @@ finding it raised; do not weaken assertions."
 done
 
 write_progress_report "iteration cap reached without a passing gate"
+write_metrics "cap_reached" "$MAX_ITER"
 log "STOP: cap of $MAX_ITER iterations reached, no package produced"
 exit 1

@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Probe — async loading</title>
+  <style>
+    body { font-family: system-ui, Arial, sans-serif; margin: 0; color: #1f2933; }
+    header { padding: 20px; background: #0b3d61; color: #fff; }
+    main { padding: 24px; max-width: 640px; }
+    .spinner { color: #6b7683; }
+    #balance { font-size: 24px; font-weight: 700; color: #0b3d61; }
+    .hidden { display: none !important; }
+  </style>
+</head>
+<body>
+  <header><strong>Probe:</strong> content appears after an async delay</header>
+  <main>
+    <p>The balance loads asynchronously. A robust test waits on the target's
+       <em>state</em> (visible / text present), never a fixed <code>sleep</code> —
+       the delay below is randomised within a bounded window on each load.</p>
+
+    <div id="loading" class="spinner">Loading your balance…</div>
+    <div id="balance" class="hidden" data-loaded="false"></div>
+  </main>
+
+  <script>
+    // Randomised but bounded delay (300–900ms): a fixed sleep would be flaky;
+    // waiting on the element's state is the only reliable strategy.
+    var delay = 300 + Math.floor(Math.random() * 600);
+    setTimeout(function () {
+      document.getElementById('loading').classList.add('hidden');
+      var b = document.getElementById('balance');
+      b.textContent = '€ 8,640.00';
+      b.setAttribute('data-loaded', 'true');
+      b.classList.remove('hidden');
+    }, delay);
+  </script>
+</body>
+</html>

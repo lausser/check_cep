@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Payment widget</title>
+  <style>
+    body { font-family: system-ui, Arial, sans-serif; margin: 0; padding: 18px; color: #1f2933; }
+    button { padding: 9px 16px; cursor: pointer; }
+    #frame-result { margin-top: 14px; font-weight: 700; }
+  </style>
+</head>
+<body>
+  <h3>Quick payment</h3>
+  <p>Send €25.00 to your savings account.</p>
+  <button id="frame-action">Confirm payment</button>
+  <div id="frame-result" data-confirmed="false">Not confirmed.</div>
+
+  <script>
+    document.getElementById('frame-action').addEventListener('click', function () {
+      var r = document.getElementById('frame-result');
+      r.textContent = 'Payment confirmed: €25.00';
+      r.setAttribute('data-confirmed', 'true');
+    });
+  </script>
+</body>
+</html>
