@@ -18,8 +18,8 @@
 #   2  PREFLIGHT or usage error
 #   130 interrupted
 #
-# `gemini` and `npx` are resolved from PATH so the loop can be driven by stubs
-# in tests.
+# `opencode` and `npx` are resolved from PATH so the loop can be driven by
+# stubs in tests.
 set -uo pipefail
 
 # --- defaults & CLI ---------------------------------------------------------
@@ -29,8 +29,8 @@ DRY_RUN=0
 INTENT=""
 
 # Per-run metrics (spec 021 FR-015 / data-model §7). Pinned model recorded for
-# trend tracking; the gemini CLI itself reads GEMINI_MODEL from the environment.
-MODEL="${GEMINI_MODEL:-gemini-3.1-flash-lite}"
+# trend tracking; passed explicitly to every `opencode run -m` invocation.
+MODEL="${OPENCODE_MODEL:-opencode/big-pickle}"
 START_EPOCH="$(date +%s)"
 MODEL_TURNS=0
 
@@ -113,17 +113,29 @@ preflight() {
         log "PREFLIGHT: no KNOWLEDGE.md yet (will be created on first findings)"
     fi
 
-    if [ -z "${GEMINI_API_KEY:-}" ]; then
-        echo "cep_authoring: PREFLIGHT: GEMINI_API_KEY is not set — the AI assistant cannot run" >&2
-        return 2
-    fi
+    case "$MODEL" in
+        google/*)
+            if [ -z "${GEMINI_API_KEY:-}" ]; then
+                echo "cep_authoring: PREFLIGHT: OPENCODE_MODEL='$MODEL' requires GEMINI_API_KEY, which is not set" >&2
+                return 2
+            fi
+            # opencode's google provider reads GOOGLE_GENERATIVE_AI_API_KEY, not
+            # GEMINI_API_KEY (discovered via live verification, spec 022 US4) —
+            # bridge our documented, familiar interface name to opencode's actual
+            # one without changing the external contract.
+            export GOOGLE_GENERATIVE_AI_API_KEY="$GEMINI_API_KEY"
+            ;;
+        *)
+            : # keyless free-tier opencode/* models proceed without a credential
+            ;;
+    esac
 
     log "PREFLIGHT: OK (test=$TESTNAME, cap=$MAX_ITER, clean-runs=$CLEAN_RUNS)"
     return 0
 }
 
 # --- AUTHOR -----------------------------------------------------------------
-# Headless gemini writes/edits the test folder, loading the authoring skill.
+# Headless opencode writes/edits the test folder, loading the authoring skill.
 # $1 = extra guidance (critic findings from the previous iteration, or empty).
 phase_author() {
     local iter="$1" feedback="$2"
@@ -139,12 +151,12 @@ phase_author() {
              "--userns=keep-id:uid=\$CONTAINER_UID,gid=\$CONTAINER_GID)" >&2
         return 3    # unrecoverable environment problem — caller aborts (not retryable)
     fi
-    # Paths given to the model MUST be absolute: gemini inherits this process's
+    # Paths given to the model MUST be absolute: opencode inherits this process's
     # cwd, which is NOT the workspace when the orchestrator is launched from
     # elsewhere (e.g. `podman run … cep_authoring`, cwd=/home/pwuser). A relative
     # "$TESTNAME/" made the model author into the wrong directory, so the RUN
     # phase found no test and the loop burned every iteration. Belt and braces:
-    # absolute paths in the prompt AND run gemini from the workspace.
+    # absolute paths in the prompt AND run opencode from the workspace.
     local prompt="Use the cep-test-authoring skill. The workspace root is \
 $WORKSPACE (your current directory); every file you create MUST live under it. \
 Author the deterministic \
@@ -153,13 +165,23 @@ absolute path; do not create the folder anywhere else). Consult \
 @$KNOWLEDGE first if it exists. Explore with chrome-devtools-mcp to discover \
 elements and confirm stable Playwright locators, reuse the sanctioned \
 robustness patterns, emit every requested value as perfdata, update \
-$KNOWLEDGE, and write $TESTDIR/VERIFICATION.md."
+$KNOWLEDGE, and write $TESTDIR/VERIFICATION.md. Credentials come EXCLUSIVELY \
+from .env — never write a hardcoded fallback default (e.g. \`?? 'literal'\`) \
+for a credential value in source code, even if that value is also visible as \
+a public demo default elsewhere (the critic must treat this as a leak, not \
+an exception); load it from .env and assert it is present instead. \
+Your task ends there: a \
+separate orchestrator step runs the independent critic and packages the test \
+automatically once the quality gate passes. Do NOT run cep_package yourself, \
+and do not try to read, locate, or execute anything outside $WORKSPACE — \
+those paths are intentionally unreachable from this session, so stop once \
+VERIFICATION.md is written rather than retrying denied actions."
     [ -n "$feedback" ] && prompt="$prompt
 
 The independent critic rejected the previous attempt. Address these findings \
 without weakening any assertion or editing the immutable intent region:
 $feedback"
-    ( cd "$WORKSPACE" && gemini -p "$prompt" --approval-mode=yolo )
+    ( cd "$WORKSPACE" && opencode run -m "$MODEL" "$prompt" )
 }
 
 # --- RUN --------------------------------------------------------------------
@@ -217,7 +239,8 @@ EOF
 }
 
 # --- CRITIC -----------------------------------------------------------------
-# Fresh gemini process, prompt = fixed critic template + intent + test files.
+# Fresh opencode process, restricted read-only `critic` agent (baked config
+# denies edit/bash), prompt = fixed critic template + intent + test files.
 # Prints ONLY the verdict ("pass"/"fail") on stdout (empty on parse failure) —
 # the caller captures it via $(...), so nothing else may go to stdout here; the
 # phase-transition line is logged by the caller.
@@ -233,15 +256,19 @@ phase_critic() {
     done < <(find "$TESTDIR" -type f \( -name '*.ts' -o -name '*.js' -o -name '*.json' \) -print0)
 
     local raw verdict
-    raw="$(gemini -p "$payload" --output-format json --approval-mode=default 2>/dev/null)"
-    # The gemini JSON envelope carries the model text under .response; that text
-    # is itself the {"verdict",...} JSON. Extract robustly with node.
+    raw="$(opencode run --agent critic -m "$MODEL" "$payload" 2>/dev/null)"
+    # Contract §3: tolerant extraction — whole-stdout JSON.parse first, else
+    # the last {…} block via regex, else empty. The critic's final text output
+    # contains a {"verdict",...} JSON object (with a nested findings array),
+    # possibly embedded in surrounding prose.
     verdict="$(printf '%s' "$raw" | node -e '
         let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{
           let v="";
-          try{const env=JSON.parse(s);const inner=env.response??s;
-              const m=String(inner).match(/\{[\s\S]*\}/);
-              if(m){v=(JSON.parse(m[0]).verdict||"").toLowerCase();}}catch(e){}
+          try{v=(JSON.parse(s).verdict||"").toLowerCase();}
+          catch(e){
+            try{const m=s.match(/\{[\s\S]*\}/);
+                if(m){v=(JSON.parse(m[0]).verdict||"").toLowerCase();}}catch(e2){}
+          }
           process.stdout.write(v);
         });' 2>/dev/null)"
     printf '%s' "$verdict"
@@ -297,7 +324,7 @@ write_progress_report() {
         echo
         echo "The workspace is left inspectable at: $TESTDIR"
         echo "Refine the intent file ($INTENT) and re-run, or finish the test"
-        echo "in a supervised session (gemini + the cep-test-authoring skill)."
+        echo "in a supervised session (opencode + the cep-test-authoring skill)."
     } > "$PROGRESS"
     log "wrote progress report: $PROGRESS"
 }
@@ -318,7 +345,7 @@ fi
 feedback=""
 iter=1
 while [ "$iter" -le "$MAX_ITER" ]; do
-    MODEL_TURNS=$((MODEL_TURNS + 1))       # AUTHOR gemini call
+    MODEL_TURNS=$((MODEL_TURNS + 1))       # AUTHOR opencode call
     phase_author "$iter" "$feedback"
     # Exit 3 = workspace not writable: retrying cannot help, so stop immediately
     # rather than burning the whole iteration budget on a mislabelled failure.
@@ -334,7 +361,7 @@ while [ "$iter" -le "$MAX_ITER" ]; do
     fi
 
     log "[iter $iter/$MAX_ITER] CRITIC"
-    MODEL_TURNS=$((MODEL_TURNS + 1))       # CRITIC gemini call
+    MODEL_TURNS=$((MODEL_TURNS + 1))       # CRITIC opencode call
     verdict="$(phase_critic "$iter")"
     if phase_gate "$iter" "$verdict"; then
         log "[iter $iter/$MAX_ITER] PACKAGE"

@@ -117,47 +117,44 @@ CMD ["python3", "./run.py"]
 # ── AI STAGE ───────────────────────────────────────────────────────────────
 FROM base AS ai
 
-# Gemini-specific env vars (not needed in base image)
-ENV GEMINI_YOLO=true \
-    GEMINI_CONFIG_HOME="/home/pwuser/.gemini"
-
-# Gemini CLI version pin (latest stable npm dist-tag, not preview/nightly)
-ARG GEMINI_CLI_VERSION=0.49.0
+# opencode CLI version pin (npm dist-tag, pinned)
+ARG OPENCODE_VERSION=1.18.4
 
 # chrome-devtools-mcp: live-browser inspection/remote-control tool for the
 # authoring agent (spec 020, research R13). Pinned; authoring image only.
 ARG CHROME_DEVTOOLS_MCP_VERSION=1.5.0
 
-# AI npm packages (Gemini CLI + playwright-cli + chrome-devtools-mcp), installed
-# additively into the same node_modules as the base image. Because the base
-# stage keeps its package.json, @playwright/test and the `playwright` bin the
-# authoring RUN phase needs survive this install. chrome-devtools-mcp is
-# registered below as a Gemini MCP server (Option A): it spawns the
-# Playwright-installed Chrome (the GPU-disable wrapper) headless and isolated so
-# it runs as pwuser in rootless Podman without an unsandboxed or second browser.
-# Exploration is two-tool (chrome-devtools-mcp discovers, @playwright/cli confirms).
-ARG AI_NODE_PACKAGES="@google/gemini-cli@${GEMINI_CLI_VERSION} @playwright/cli chrome-devtools-mcp@${CHROME_DEVTOOLS_MCP_VERSION}"
-RUN mkdir -p /home/pwuser/.gemini && \
+# AI npm packages (opencode CLI + playwright-cli + chrome-devtools-mcp),
+# installed additively into the same node_modules as the base image. Because
+# the base stage keeps its package.json, @playwright/test and the
+# `playwright` bin the authoring RUN phase needs survive this install.
+# chrome-devtools-mcp is registered below as an opencode local MCP server: it
+# spawns the Playwright-installed Chrome (the GPU-disable wrapper) headless
+# and isolated so it runs as pwuser in rootless Podman without an unsandboxed
+# or second browser. Exploration is two-tool (chrome-devtools-mcp discovers,
+# @playwright/cli confirms).
+ARG AI_NODE_PACKAGES="opencode-ai@${OPENCODE_VERSION} @playwright/cli chrome-devtools-mcp@${CHROME_DEVTOOLS_MCP_VERSION}"
+RUN mkdir -p /home/pwuser/.config/opencode && \
     echo "--- Installing AI Addons ---" && \
     npm install $AI_NODE_PACKAGES && \
-    node -e 'const fs=require("fs");const {chromium}=require("playwright");const chrome=chromium.executablePath();const settings={security:{folderTrust:{enabled:false},auth:{selectedType:"gemini-api-key"},enablePermanentToolApproval:true},ui:{showHomeDirectoryWarning:false,theme:"Default Light",showCompatibilityWarnings:false},general:{defaultApprovalMode:"default"},mcpServers:{"chrome-devtools":{command:"cep-cdp-mcp",args:["--isolated=true","--viewport=1280x720","--executablePath="+chrome,"--chromeArg=--no-sandbox","--chromeArg=--disable-dev-shm-usage"]}}};fs.writeFileSync("/home/pwuser/.gemini/settings.json",JSON.stringify(settings,null,2)+"\n");'
+    node -e 'const fs=require("fs");const {chromium}=require("playwright");const chrome=chromium.executablePath();const config={"$schema":"https://opencode.ai/config.json",model:"opencode/big-pickle",permission:{edit:"allow",bash:"allow"},mcp:{"chrome-devtools":{type:"local",command:["cep-cdp-mcp","--isolated=true","--viewport=1280x720","--executablePath="+chrome,"--chromeArg=--no-sandbox","--chromeArg=--disable-dev-shm-usage"],enabled:true}},agent:{critic:{description:"Read-only reviewer for authored CEP tests",permission:{edit:"deny",bash:"deny"}}}};fs.writeFileSync("/home/pwuser/.config/opencode/opencode.json",JSON.stringify(config,null,2)+"\n");'
 
 # Install git temporarily; clone playwright-cli skills AND playwright-skill in one layer
 USER root
 RUN apt-get update && apt-get install -y git && \
     git clone --depth 1 https://github.com/microsoft/playwright-cli.git /tmp/pw-cli && \
     git clone --depth 1 https://github.com/lackeyjb/playwright-skill.git /tmp/pw-skill && \
-    mkdir -p /home/pwuser/.gemini/skills && \
-    cp -r /tmp/pw-cli/skills/* /home/pwuser/.gemini/skills/ && \
-    cp -r /tmp/pw-skill/skills/playwright-skill /home/pwuser/.gemini/skills/ && \
-    chown -R pwuser:pwuser /home/pwuser/.gemini && \
+    mkdir -p /home/pwuser/.agents/skills && \
+    cp -r /tmp/pw-cli/skills/* /home/pwuser/.agents/skills/ && \
+    cp -r /tmp/pw-skill/skills/playwright-skill /home/pwuser/.agents/skills/ && \
+    chown -R pwuser:pwuser /home/pwuser/.agents && \
     rm -rf /tmp/pw-cli /tmp/pw-skill && \
     apt-get purge -y git && apt-get autoremove -y && rm -rf /var/lib/apt/lists/*
 
-# Copy local agent skills (check-cep-vision + sakuli-migration + cep-test-authoring)
+# Copy local agent skills (check-cep-vision + sakuli-migration + cep-test-authoring).
+# opencode natively discovers skills at ~/.agents/skills/<name>/SKILL.md — no
+# registration or symlink needed (unlike gemini's .gemini/skills wiring).
 COPY --chown=pwuser:pwuser .agents-skills/ /home/pwuser/.agents/skills/
-RUN ln -sf /home/pwuser/.agents/skills /home/pwuser/.gemini/skills/agents && \
-    chown -R pwuser:pwuser /home/pwuser
 
 # Authoring-mode operator tools (spec 020): the unattended orchestrator and the
 # shared packaging tool. Siblings of cep_codegen in /home/pwuser/.local/bin.

@@ -28,18 +28,19 @@ CEP_PLUGIN = Path(__file__).parent.parent.parent / "src" / "check_cep"
 _FIXTURES_DIR = Path(__file__).parent.parent / "fixtures"
 
 # ---------------------------------------------------------------------------
-# AI test-authoring evaluation gate (spec 021)
+# AI test-authoring evaluation gate (spec 021, re-keyed by spec 022)
 # ---------------------------------------------------------------------------
-# The gated behavioural eval (test_authoring_eval.py) is gated SOLELY on the
-# presence of GEMINI_API_KEY (clarification 2026-07-13) — no separate opt-in
-# flag. The `authoring_eval` marker is for selection convenience only, NOT the
-# gate. A second skipif guards on the AI image being present.
+# The default free model (opencode/big-pickle) is keyless, so the eval can no
+# longer be gated on credential presence. It is gated SOLELY on the explicit
+# CEP_AI_EVAL=1 opt-in (user decision 2026-07-20). The `authoring_eval` marker
+# is for selection convenience only, NOT the gate. A second skipif guards on
+# the AI image being present.
 
 CEP_AI_IMAGE = os.environ.get("CEP_AI_IMAGE", "localhost/check_cep:ai-latest")
 
-requires_gemini_key = pytest.mark.skipif(
-    not os.environ.get("GEMINI_API_KEY"),
-    reason="GEMINI_API_KEY not set — authoring eval is gated on its presence",
+requires_ai_eval = pytest.mark.skipif(
+    os.environ.get("CEP_AI_EVAL") != "1",
+    reason="CEP_AI_EVAL=1 not set — live authoring eval is explicit opt-in",
 )
 
 
@@ -67,8 +68,8 @@ def pytest_configure(config):
     config.addinivalue_line(
         "markers",
         "authoring_eval: gated behavioural eval of the AI test-authoring "
-        "workflow (spec 021). Gated on GEMINI_API_KEY presence; use "
-        "-m 'not authoring_eval' to exclude.",
+        "workflow (spec 021/022). Gated on CEP_AI_EVAL=1 (explicit opt-in); "
+        "use -m 'not authoring_eval' to exclude.",
     )
 
 # Spectate mode: run browsers headed so a human can watch the tests.

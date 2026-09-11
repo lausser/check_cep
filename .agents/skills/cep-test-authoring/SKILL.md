@@ -15,15 +15,15 @@ package it.
 ## When to Use
 
 Use this skill when an admin has entered `check_cep --authoring` (a bash
-shell in the `ai` image, site workspace mounted read-write, `GEMINI_API_KEY`
-set) and wants to produce a check from an intent file. You are working
+shell in the `ai` image, site workspace mounted read-write; keyless by
+default) and wants to produce a check from an intent file. You are working
 inside the container as `pwuser`; the site workspace is at
 `/home/pwuser/tests`.
 
 ## The Golden Rule
 
 The output is a **deterministic Playwright test**. Once packaged and
-deployed, it runs on a schedule with **no AI, no `GEMINI_API_KEY`, and no
+deployed, it runs on a schedule with **no AI, no credential, and no
 browser-inspection tooling** (FR-007, FR-020). Never author anything that
 would need a model at run time. If you cannot express a check
 deterministically, say so — do not fake it.
@@ -115,8 +115,12 @@ possible.
 
 ### AUTHOR — write the deterministic test
 
-- Create `tests/<site>/<TestName>/<TestName>.test.ts` plus a per-test
-  `playwright.config.ts` and any helpers under `functions/`.
+- Your current working directory **is** the site-scoped workspace root
+  already (one per site/hostname) — the intent's `Site:` field is
+  descriptive metadata, not an instruction to create another directory.
+  Create `<TestName>/<TestName>.test.ts` plus a per-test
+  `playwright.config.ts` and any helpers under `functions/` **directly in the
+  current directory** — never nest an extra site-named folder above it.
 - **Keep a consistent viewport.** The exploration browser and the standard
   test runtime both use **1280×720**. Author the test at that viewport (the
   Playwright default, or set it explicitly) unless the intent genuinely needs
@@ -259,17 +263,20 @@ items, all must be YES). The behaviours below back it up.
   conversation — and returns `{"verdict","findings"}`. Resolve every finding,
   or fix the test, before packaging. Treat its verdict as the gate, not a
   suggestion (FR-012).
-- **Spectate advisory (non-blocking).** Recommend the admin watch the
-  finished test once in spectate mode (`CEP_SPECTATE=1`, `--headed`/`--vnc`,
-  `CEP_SLOW_MO`, `CEP_VISION_HIGHLIGHT_MS`). This is human inspection, offered
-  and encouraged — it never blocks packaging (FR-012a).
+- **Human-inspection advisory (non-blocking).** Recommend the admin watch the
+  finished test once themselves, by re-running `check_cep --authoring` with
+  `--headed` (or `--vnc`) and optionally `CEP_SLOW_MO` to pace it. This is
+  human inspection, offered and encouraged — it never blocks packaging
+  (FR-012a). (`CEP_SPECTATE` is unrelated — a convenience read only by this
+  project's own `pytest` suite, not by a real `check_cep` invocation; never
+  recommend it to an admin.)
 - **Write `VERIFICATION.md`** in the test folder, skimmable in 60 seconds,
   with all five mandatory sections (SC-005, FR-014):
   - **Verified** — intent claims demonstrated by passing runs.
   - **Assumed** — defaults chosen where the intent was silent.
   - **Could not verify** — intent claims not demonstrable, with reasons.
   - **Deviations** — where the site differed from the described flow.
-  - **Human inspection advisory** — the spectate-mode invitation.
+  - **Human inspection advisory** — the headed-mode re-run invitation.
 - **Package.** Only when every checklist item is YES, build the deployable
   archive by invoking the shared tool on the finished test folder (FR-018):
 
@@ -285,8 +292,9 @@ Findings compound. A later session for the same site should start from
 experience, not re-explore from scratch.
 
 - **Read before exploring.** At the start of every session, read the
-  site-level `KNOWLEDGE.md` at the workspace root (`tests/<site>/KNOWLEDGE.md`)
-  before touching the browser. It may already document the consent-dialog
+  site-level `KNOWLEDGE.md` at the workspace root (`./KNOWLEDGE.md` — your
+  current directory, not a `<site>/` subfolder of it) before touching the
+  browser. It may already document the consent-dialog
   handling, reliable roles/selectors, iframe quirks, timing/polling behaviour,
   or login peculiarities you would otherwise rediscover (FR-017).
 - **Write at session end.** Append or update `KNOWLEDGE.md` with the new
@@ -300,9 +308,9 @@ experience, not re-explore from scratch.
 
 | Where | Scope | Written by | Contains |
 |---|---|---|---|
-| `tests/<site>/KNOWLEDGE.md` | site-general | authoring sessions | consent dialogs, reliable roles/selectors, iframe/timing/login quirks — anything true for the whole site |
+| `KNOWLEDGE.md` (workspace root — your current directory) | site-general | authoring sessions | consent dialogs, reliable roles/selectors, iframe/timing/login quirks — anything true for the whole site |
 | `<TestName>.ai` → `## Lessons Learned` | this test's attempts | authoring sessions (below the marker only) | dated bullets: what was tried on this test, what failed, what to do instead |
-| `tests/<site>/<TestName>/README.md` | this one test | optional | test-specific notes (existing convention) |
+| `<TestName>/README.md` | this one test | optional | test-specific notes (existing convention) |
 
 - **Write site-generic helpers.** Helpers you create (cookie/consent
   handling, login, credential loading) belong to the whole site — keep them

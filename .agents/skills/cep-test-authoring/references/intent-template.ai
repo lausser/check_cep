@@ -1,6 +1,6 @@
 # Test Intent: <TestName>
 
-Site: <site folder name, e.g. onvista>
+Site: <a short label for this site/host, e.g. onvista — for your own reference only, not a folder to create>
 Requested by: <name / team>
 Date: <YYYY-MM-DD>
 

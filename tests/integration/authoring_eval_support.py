@@ -4,8 +4,9 @@ Drives the REAL `cep_authoring` orchestrator inside the AI image against the
 self-contained sample app, then asserts **behavioural properties** of the run —
 never the generated test's source text (FR-008 / SC-008).
 
-Nothing here runs unless the caller has already passed the `GEMINI_API_KEY`
-gate; the module has no import-time side effects and needs no key to import.
+Nothing here runs unless the caller has already passed the `CEP_AI_EVAL=1`
+gate (spec 022); the module has no import-time side effects and needs no key
+to import — the default free model (opencode/big-pickle) is keyless.
 
 Property extraction (contracts/eval-properties.md) works only from observable
 artifacts: the orchestrator exit code, the produced `.tar.gz`, the run log, the
@@ -20,7 +21,6 @@ import re
 import shutil
 import subprocess
 import tarfile
-import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Optional
@@ -38,9 +38,8 @@ CEP_AI_IMAGE = os.environ.get("CEP_AI_IMAGE", "localhost/check_cep:ai-latest")
 # the rw authoring workspace is writable by the in-container process.
 CONTAINER_UID = 1001
 CONTAINER_GID = 1001
-GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.1-flash-lite")  # FR-014 pin
+OPENCODE_MODEL = os.environ.get("OPENCODE_MODEL", "opencode/big-pickle")  # FR-014 pin
 CEP_MAX_ITERATIONS = os.environ.get("CEP_MAX_ITERATIONS", "5")
-CEP_EVAL_RETRIES = int(os.environ.get("CEP_EVAL_RETRIES", "1"))
 HEADED = bool(os.environ.get("HEADED", ""))
 CEP_SLOW_MO = os.environ.get("CEP_SLOW_MO", "")
 
@@ -135,10 +134,13 @@ def _container_name(testname: str) -> str:
 
 
 def _podman_authoring_cmd(ws: Path, testname: str) -> list[str]:
-    env_flags = [
-        "--env", f"GEMINI_API_KEY={os.environ.get('GEMINI_API_KEY', '')}",
-        "--env", f"GEMINI_MODEL={GEMINI_MODEL}",
-    ]
+    # OPENCODE_MODEL is always passed (the pinned default is keyless). The
+    # credential vars are passed through ONLY when set on the host — the
+    # default free Zen model needs neither (contracts §1/§6).
+    env_flags = ["--env", f"OPENCODE_MODEL={OPENCODE_MODEL}"]
+    for key in ("OPENCODE_API_KEY", "GEMINI_API_KEY"):
+        if os.environ.get(key):
+            env_flags += ["--env", f"{key}={os.environ[key]}"]
     if HEADED:
         env_flags += ["--env", "HEADED=1"]
     if CEP_SLOW_MO:
@@ -163,46 +165,39 @@ def _podman_authoring_cmd(ws: Path, testname: str) -> list[str]:
 
 
 def run_authoring(ws: Path, testname: str, proc_timeout: int = 900) -> RunResult:
-    """Invoke cep_authoring in the AI image, with bounded whole-run retries (R5).
+    """Invoke cep_authoring once in the AI image.
 
-    A run whose output is dominated by quota/availability errors is classified
-    `quota_error` (retried, then reported distinctly) rather than a real failure.
+    A run whose output is dominated by quota/availability errors is
+    classified `quota_error` — a distinct, immediate failure (never retried
+    or skipped, user decision 2026-07-20): the fix is more budget, not a
+    retry, and silently spreading eval runs across days would hide the
+    signal this eval exists to produce.
     """
     cmd = _podman_authoring_cmd(ws, testname)
-    attempts = 0
     combined = ""
     code = 1
     timed_out = False
-    for attempt in range(1, CEP_EVAL_RETRIES + 2):  # 1 try + CEP_EVAL_RETRIES
-        attempts = attempt
-        timed_out = False
-        try:
-            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=proc_timeout)
-            combined = (proc.stdout or "") + (proc.stderr or "")
-            code = proc.returncode
-        except subprocess.TimeoutExpired as exc:
-            # A hung/over-long run must report as a clean failure, not a harness
-            # error. Surface whatever the orchestrator managed to emit.
-            timed_out = True
-            code = 124
-            partial = (exc.stdout or b"") + (exc.stderr or b"")
-            if isinstance(partial, bytes):
-                partial = partial.decode(errors="replace")
-            combined = f"{partial}\n[harness] cep_authoring exceeded {proc_timeout}s — killed."
-            # Killing the podman CLI leaves the container running; remove it.
-            subprocess.run(["podman", "rm", "-f", _container_name(testname)],
-                           capture_output=True, timeout=60)
-        if code == 0:
-            break
-        if timed_out or not _QUOTA_PATTERNS.search(combined):
-            break  # genuine failure/timeout — do not waste more quota
-        time.sleep(2)  # transient backoff before retry
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=proc_timeout)
+        combined = (proc.stdout or "") + (proc.stderr or "")
+        code = proc.returncode
+    except subprocess.TimeoutExpired as exc:
+        # A hung/over-long run must report as a clean failure, not a harness
+        # error. Surface whatever the orchestrator managed to emit.
+        timed_out = True
+        code = 124
+        partial = (exc.stdout or b"") + (exc.stderr or b"")
+        if isinstance(partial, bytes):
+            partial = partial.decode(errors="replace")
+        combined = f"{partial}\n[harness] cep_authoring exceeded {proc_timeout}s — killed."
+        # Killing the podman CLI leaves the container running; remove it.
+        subprocess.run(["podman", "rm", "-f", _container_name(testname)],
+                       capture_output=True, timeout=60)
 
     classification = "ran"
     if timed_out:
         # A run that stalls *because* the model backed off on quota is a budget
-        # problem, not an authoring regression — classify it as such so it skips
-        # rather than reporting a false failure.
+        # problem, not an authoring regression — classify it as such.
         classification = "quota_error" if _QUOTA_PATTERNS.search(combined) else "timeout"
     elif code != 0 and _QUOTA_PATTERNS.search(combined):
         classification = "quota_error"
@@ -211,7 +206,7 @@ def run_authoring(ws: Path, testname: str, proc_timeout: int = 900) -> RunResult
         exit_code=code,
         workspace=ws,
         combined_output=combined,
-        attempts=attempts,
+        attempts=1,
         classification=classification,
         metrics=read_run_metrics(ws, testname),
     )
@@ -254,8 +249,16 @@ def _extract_package(pkg: Path, dest: Path) -> Path:
         else next(p for p in dest.iterdir() if p.is_dir())
 
 
-def run_packaged_test(pkg_dir: Path) -> tuple[int, str, dict]:
+def run_packaged_test(run_root: Path, testname: str) -> tuple[int, str, dict]:
     """Run the packaged test in the AI image; return (exit, stdout, steps_json).
+
+    `run_root` mirrors the authoring workspace layout: the extracted package
+    at `run_root/<testname>` plus any sibling fixture folders (journey/,
+    probes/) copied alongside it by `extract_and_run` — cep_package's
+    contractual output never bundles those (real deployments target live
+    URLs, not local file:// pages), but file://-based golden cases resolve
+    them relative to their own package, so the standalone re-run needs the
+    same sibling layout authoring had.
 
     No AI involved — this is a plain `npx playwright test` producing steps.json,
     from which perfdata is read. Used for values_emitted + capability asserts,
@@ -265,18 +268,18 @@ def run_packaged_test(pkg_dir: Path) -> tuple[int, str, dict]:
         "podman", "run", "--rm",
         f"--userns=keep-id:uid={CONTAINER_UID},gid={CONTAINER_GID}",
         "--security-opt", "label=disable",
-        "--volume", f"{pkg_dir}:/home/pwuser/tests/_pkg:rw,z",
+        "--volume", f"{run_root}:/home/pwuser/tests:rw,z",
         CEP_AI_IMAGE,
         "bash", "-lc",
-        "cd /home/pwuser/tests/_pkg && "
-        "PLAYWRIGHT_JSON_OUTPUT_NAME=/home/pwuser/tests/_pkg/steps.json "
+        f"cd /home/pwuser/tests/{testname} && "
+        f"PLAYWRIGHT_JSON_OUTPUT_NAME=/home/pwuser/tests/{testname}/steps.json "
         "NODE_PATH=/home/pwuser/node_modules "
         "npx playwright test --reporter=json,line",
     ]
     proc = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
     combined = (proc.stdout or "") + (proc.stderr or "")
     steps: dict = {}
-    steps_path = pkg_dir / "steps.json"
+    steps_path = run_root / testname / "steps.json"
     if steps_path.is_file():
         try:
             steps = json.loads(steps_path.read_text())
@@ -305,9 +308,21 @@ def critic_pass(result: RunResult) -> bool:
 
 
 def no_secret_leak(pkg_dir: Path) -> bool:
-    """No credential-shaped string appears in any packaged file except `.env`."""
+    """No credential-shaped string appears in any packaged CODE file except `.env`.
+
+    Excludes `.env` itself, the intent file (`*.ai` — our own golden fixture,
+    packaged verbatim by cep_package's contractual layout, and it names the
+    demo credential in prose to brief the AI), and documentation files
+    (VERIFICATION.md, KNOWLEDGE.md — expected to reference a known demo
+    credential in prose for human readers). Live authoring runs surfaced this
+    distinction: the security-relevant question is whether AI-AUTHORED SOURCE
+    hardcodes the secret, not whether provided/generated prose mentions it.
+    """
+    _DOC_NAMES = {"VERIFICATION.md", "KNOWLEDGE.md"}
     for path in pkg_dir.rglob("*"):
         if not path.is_file() or path.name == ".env":
+            continue
+        if path.suffix == ".ai" or path.name in _DOC_NAMES:
             continue
         try:
             text = path.read_text(errors="ignore")
@@ -392,11 +407,20 @@ def _tn(result: RunResult) -> str:
 
 
 def extract_and_run(result: RunResult, tmp_path: Path) -> tuple[Path, int, str, dict]:
-    """Extract the produced package and run it once; return (pkg_dir, exit, stdout, steps)."""
+    """Extract the produced package and run it once; return (pkg_dir, exit, stdout, steps).
+
+    Copies any sibling fixture folders (journey/, probes/) from the authoring
+    workspace alongside the extracted package, mirroring the authoring layout
+    for file://-based golden cases (see run_packaged_test docstring).
+    """
     pkg = _find_package(result.workspace, _tn(result))
     assert pkg is not None, "no package to extract"
     dest = tmp_path / f"pkg-{_tn(result)}"
     dest.mkdir()
     pkg_dir = _extract_package(pkg, dest)
-    exit_code, stdout, steps = run_packaged_test(pkg_dir)
+    for fixture in ("journey", "probes"):
+        src = result.workspace / fixture
+        if src.is_dir():
+            shutil.copytree(src, dest / fixture)
+    exit_code, stdout, steps = run_packaged_test(dest, pkg_dir.name)
     return pkg_dir, exit_code, stdout, steps

@@ -1241,21 +1241,77 @@ Send `<TestName>.ai` plus any referenced images to your admin.
 
 ### Part 2 — For the admin (running the session)
 
-**Enter authoring mode** — a bash shell in the `ai` image with the
-site-level workspace mounted read-write and your Gemini key available:
+**Build the `ai` image once** (adds `opencode-ai`, `playwright-cli`, and the
+authoring skills on top of the base image — see *Makefile Targets* in
+`README.md`):
 
 ```bash
-export GEMINI_API_KEY=...        # or pass --gemini-api-key
+make image-ai        # → localhost/check_cep:ai-latest
+```
+
+**Enter authoring mode** — a bash shell in the `ai` image with the
+site-level workspace mounted read-write. The default backend, opencode's free
+`opencode/big-pickle` model, is **keyless** — nothing to export for the common
+case:
+
+```bash
 check_cep --host-name onvista --service-description Portfolio \
           --image check_cep:ai --probe-location dev \
           --authoring
+```
+
+Optional connections go through the generic `--environ NAME[=VALUE]`
+(repeatable; bare `--environ NAME` forwards the host env var's current value
+so the secret never appears in `ps`). Custom providers (in-house LiteLLM,
+NVIDIA NIM, …) are an overlay file via `--opencode-config` — opencode
+**merges** it on top of the baked image config (MCP, critic, permissions
+stay). Do not copy those sections into the overlay.
+
+```bash
+# curated paid Zen model
+export OPENCODE_API_KEY=...
+check_cep … --authoring \
+    --environ OPENCODE_MODEL=opencode/<paid-model> --environ OPENCODE_API_KEY
+
+# Gemini connection
+export GEMINI_API_KEY=...
+check_cep … --authoring \
+    --environ OPENCODE_MODEL=google/gemini-3.1-flash-lite --environ GEMINI_API_KEY
+
+# house / third-party providers (overlay JSON, keys via --environ)
+check_cep … --authoring \
+    --opencode-config ~/.config/opencode/cep-providers.json \
+    --environ OPENCODE_MODEL=consol-litellm/lassi \
+    --environ CONSOL_LITELLM_API_KEY
+```
+
+The overlay is a normal `opencode.json` fragment — typically just `provider`
+(and `{env:VAR}` for secrets). Example:
+
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "provider": {
+    "consol-litellm": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "ConSol LiteLLM",
+      "options": {
+        "baseURL": "https://litellm.example/v1",
+        "apiKey": "{env:CONSOL_LITELLM_API_KEY}"
+      },
+      "models": {
+        "lassi": { "name": "lassi", "tools": true }
+      }
+    }
+  }
+}
 ```
 
 Place `<TestName>.ai` (and any `@`-referenced images) in the workspace root
 (`/home/pwuser/tests`), then run a supervised session:
 
 ```
-gemini
+opencode
 > Use the cep-test-authoring skill. Author the test described in
 > @Portfolio.ai. Consult @KNOWLEDGE.md first.
 ```
@@ -1291,8 +1347,11 @@ explicit timeout with whoever owns the service definition.
 - Read `Portfolio/VERIFICATION.md` — a 60-second report of what was
   *Verified*, *Assumed*, *Could not verify*, and where the site *Deviated*
   from the described flow.
-- Recommended: watch the finished test once yourself in spectate mode
-  (`CEP_SPECTATE=1 … --headed`, see *Headed Mode* above).
+- Recommended: watch the finished test once yourself by re-running it with
+  `--headed` (add `CEP_SLOW_MO=400` if it goes by too fast to follow — see
+  *Headed Mode* above). `CEP_SPECTATE` is a separate convenience read only by
+  this project's own `pytest` suite; it has no effect on a real `check_cep`
+  invocation like this one.
 
 **If it is not right, refine the intent — never hand-patch the test.** Edit
 `Portfolio.ai` (with the person who requested it) and re-run the session;
@@ -1303,25 +1362,28 @@ When you are satisfied, the session packages the test into a
 `<TestName>-<date>.tar.gz` deployable through the normal
 `--test-artifact` / S3 mechanisms (see the deployment sections above).
 
-### Deployment is AI-free (no `GEMINI_API_KEY`, no browser inspection)
+### Deployment is AI-free (no `OPENCODE_API_KEY`/`GEMINI_API_KEY`, no browser inspection)
 
 An AI-authored check is an ordinary deterministic Playwright test. When it
-runs on a schedule it needs **no** `GEMINI_API_KEY` and involves **no**
+runs on a schedule it needs **no** credential and involves **no**
 `chrome-devtools-mcp` or any other authoring tooling — those exist only in
 authoring mode:
 
-- The Gemini credential is injected into the container **only** when
-  `--authoring` is passed. On scheduled runs and plain `--shell`, no key is
-  injected even if `GEMINI_API_KEY` is set in the host environment.
+- `--environ` (and everything it can inject — `OPENCODE_API_KEY`,
+  `GEMINI_API_KEY`, `OPENCODE_MODEL`, …) takes effect **only** when
+  `--authoring` is passed. On scheduled runs and plain `--shell`, `--environ`
+  is inert (a warning is printed and nothing is injected), even if the named
+  host env var is set.
 - The browser-inspection MCP server is registered only in the `ai` image and
   is never invoked by a packaged test at run time.
 
-To confirm on a production host: the deployed check runs green with
-`GEMINI_API_KEY` unset, and the plugin never adds a `GEMINI_API_KEY=…`
-`--env` to the podman command outside authoring mode (covered by the
-authoring env-injection tests in `tests/integration/test_modes.py`).
+To confirm on a production host: the deployed check runs green with no AI
+credential set, and the plugin never adds an `OPENCODE_API_KEY=…` or
+`GEMINI_API_KEY=…` `--env` to the podman command outside authoring mode
+(covered by the authoring env-injection tests in
+`tests/integration/test_modes.py`).
 
-### Evaluating the authoring workflow (spec 021)
+### Evaluating the authoring workflow (spec 021/022)
 
 The authoring workflow is exercised against a self-contained, deterministic
 **sample app** and hand-written **golden pairs** under `tests/authoring-eval/`:
@@ -1335,8 +1397,10 @@ The authoring workflow is exercised against a self-contained, deterministic
 
 A **gated behavioural eval** (`tests/integration/test_authoring_eval.py`) runs
 the real `cep_authoring` orchestrator against the sample app and asserts
-capability *outcomes* — never the generated source text. It is gated **solely
-on the presence of `GEMINI_API_KEY`**: unset ⇒ every case skips and the fast
-suite stays green; set ⇒ the cases run (use `-m "not authoring_eval"` to
-exclude). See `tests/authoring-eval/README.md` for the offline and gated run
-recipes (including the headed + `CEP_SLOW_MO` watch mode).
+capability *outcomes* — never the generated source text. Because the default
+model is keyless, the eval can't be gated on credential presence: it is gated
+**solely on the explicit `CEP_AI_EVAL=1` opt-in**. Unset ⇒ every case skips
+and the fast suite stays green; `CEP_AI_EVAL=1` ⇒ the cases run (use
+`-m "not authoring_eval"` to exclude). See `tests/authoring-eval/README.md`
+for the offline and gated run recipes (including the headed + `CEP_SLOW_MO`
+watch mode).

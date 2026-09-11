@@ -1,4 +1,4 @@
-# AI Test-Authoring Hardening (spec 021)
+# AI Test-Authoring Hardening (spec 021/022)
 
 This tree proves — and keeps proving — that the spec-020 AI authoring workflow
 reliably produces *good*, deterministic Playwright tests for *hard*, realistic
@@ -53,32 +53,29 @@ NODE_PATH="$NM" node "$NM/.bin/playwright" test --config playwright.config.ts
 
 ## ⚠ Verification status
 
-**The gated eval has not yet been run to completion** — no sufficient model-token
-budget was available. Everything in sections A and B below is fully verified
-offline; the live workflow was confirmed to explore the journey site and author a
-good test into the workspace on its first iteration, but **no run has produced a
-package end-to-end**, so the full positive-path property set (SC-002) and the
-adversarial cases (SC-003) remain unproven.
+**The gated eval has been run to completion on the opencode backend
+(spec 022)**: all 12 cases pass — 9/9 positive cases (SC-001, SC-003) and all
+3 adversarial cases (SC-002), each correctly refusing/flagging rather than
+fabricating a passing package. The default free `opencode/big-pickle` model
+is keyless, so this required no paid key — only patience across a couple of
+transient rate-limit windows on the free tier (a quota/rate-limit hit is
+classified `quota_error` and **fails** the run immediately; there is no
+skip/retry — see the gating knobs below).
 
-The blocker is budget, not a known defect: a single clean authoring run exhausts
-the Gemini free-tier cap (`generate_content_free_tier_input_token_count`,
-250 000/day) during exploration. Supply a paid key or a cheaper provider to
-finish the verification. Quota exhaustion is classified as a `skip`, so the eval
-never reports a false regression when the budget runs out.
+## C. Run the gated behavioural eval (needs AI image + `CEP_AI_EVAL=1`)
 
-## C. Run the gated behavioural eval (needs AI image + a Gemini key + quota)
-
-The eval is gated **solely by the presence of `GEMINI_API_KEY`** — no separate
-opt-in flag. With the key unset the eval cases `skip` and the fast/offline suite
-stays green.
+The eval is gated **solely by the explicit `CEP_AI_EVAL=1` opt-in** — the
+default model is keyless, so credential presence can no longer be the gate.
+With the flag unset the eval cases `skip` and the fast/offline suite stays
+green.
 
 ```bash
 make image-ai                                  # → localhost/check_cep:ai-latest
-export GEMINI_API_KEY=...                       # THE gate. Secret, never committed.
-export GEMINI_MODEL=gemini-3.1-flash-lite       # pinned (FR-014)
+export CEP_AI_EVAL=1                            # THE gate (explicit opt-in)
+# optional: export OPENCODE_MODEL=opencode/big-pickle   # already the default
 
 # flagship case only (conserves quota):
-pytest -m authoring_eval tests/integration/test_authoring_eval.py -k journey -v
+pytest -m authoring_eval tests/integration/test_authoring_eval.py -k MultiPageJourney -v
 
 # full positive + adversarial set (nightly / on-demand):
 pytest -m authoring_eval tests/integration/test_authoring_eval.py -v
@@ -96,11 +93,17 @@ export CEP_SLOW_MO=400        # FR-016: slows the verification RUN so it's watch
 
 | Env | Default | Effect |
 |---|---|---|
-| `GEMINI_API_KEY` | unset | **The gate.** Set ⇒ eval eligible; unset ⇒ all cases skip. |
+| `CEP_AI_EVAL` | unset | **The gate.** `1` ⇒ eval eligible; unset ⇒ all cases skip. |
 | `CEP_AI_IMAGE` | `localhost/check_cep:ai-latest` | AI image; missing ⇒ skip. |
-| `GEMINI_MODEL` | `gemini-3.1-flash-lite` | Pinned model (FR-014). |
+| `OPENCODE_MODEL` | `opencode/big-pickle` | Pinned model (FR-014); keyless by default. |
+| `OPENCODE_API_KEY` / `GEMINI_API_KEY` | unset | Passed through if set on the host (curated paid Zen model / Gemini connection); never the gate. |
 | `CEP_MAX_ITERATIONS` | `5` | Passed to `cep_authoring -n` (pass bar). |
-| `CEP_EVAL_RETRIES` | `1` | Coarse whole-run retries to absorb model flakiness. |
 | `CEP_SLOW_MO` | unset | With `HEADED=1`, slows the verification RUN (FR-016). |
 
-See `specs/021-ai-test-hardening/` for the full spec, contracts, and research.
+A quota/rate-limit hit **fails** the eval immediately with a distinct
+`quota_error` classification — there is no retry or skip/spread mode
+(user decision 2026-07-20). The fix is more budget (another free model or a
+Zen key via `OPENCODE_MODEL`), then a fresh run.
+
+See `specs/022-opencode-authoring/` for the backend-migration spec, contracts,
+and research (`specs/021-ai-test-hardening/` for the original hardening spec).

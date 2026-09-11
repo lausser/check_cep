@@ -4,19 +4,25 @@ Runs the REAL `cep_authoring` orchestrator against the self-contained sample app
 and asserts capability OUTCOMES — never the generated test's source text
 (FR-008 / SC-008).
 
-Gating (contracts/harness-cli.md): the sole gate is the presence of
-`GEMINI_API_KEY`. With the key unset every case `skip`s and the fast/offline
-suite stays green (SC-004). A second skip guards on the AI image being present.
+Gating (contracts §6, spec 022): the sole gate is the explicit `CEP_AI_EVAL=1`
+opt-in — the default free model (opencode/big-pickle) is keyless, so
+credential presence can no longer gate the eval. With the flag unset every
+case `skip`s and the fast/offline suite stays green (SC-006). A second skip
+guards on the AI image being present.
+
+A run whose output is dominated by quota/availability errors FAILS the case
+immediately (never retried or skipped, user decision 2026-07-20) — the fix is
+more budget (another free model or a Zen key via OPENCODE_MODEL), not a retry.
 
 Run only these cases:
-    pytest -m authoring_eval tests/integration/test_authoring_eval.py -v
+    CEP_AI_EVAL=1 pytest -m authoring_eval tests/integration/test_authoring_eval.py -v
 """
 
 import json
 
 import pytest
 
-from conftest import requires_ai_image, requires_gemini_key
+from conftest import requires_ai_image, requires_ai_eval
 from authoring_eval_support import (
     EvalCase,
     adversarial_holds,
@@ -67,7 +73,7 @@ def _record_metrics(record_property, case, result):
 
 
 @pytest.mark.authoring_eval
-@requires_gemini_key
+@requires_ai_eval
 @requires_ai_image
 @pytest.mark.parametrize("case", POSITIVE_CASES, ids=lambda c: c.name)
 def test_authoring_positive(case, tmp_path, record_property):
@@ -75,8 +81,11 @@ def test_authoring_positive(case, tmp_path, record_property):
     result = run_authoring(ws, case.testname)
     _record_metrics(record_property, case, result)
 
-    if result.classification == "quota_error":
-        pytest.skip(f"model quota/availability error for {case.name} (R5)")
+    assert result.classification != "quota_error", (
+        f"quota/availability error for {case.name} — needs more budget "
+        f"(another free model or a Zen key via OPENCODE_MODEL), not a "
+        f"migration bug:\n{result.combined_output[-2000:]}"
+    )
 
     # --- behavioural properties (contracts/eval-properties.md) ---
     assert package_produced(result), f"no package produced:\n{result.combined_output[-2000:]}"
@@ -111,7 +120,7 @@ ADVERSARIAL_CASES = [
 
 
 @pytest.mark.authoring_eval
-@requires_gemini_key
+@requires_ai_eval
 @requires_ai_image
 @pytest.mark.parametrize("case", ADVERSARIAL_CASES, ids=lambda c: c.name)
 def test_authoring_adversarial(case, tmp_path, record_property):
@@ -119,8 +128,11 @@ def test_authoring_adversarial(case, tmp_path, record_property):
     result = run_authoring(ws, case.testname)
     _record_metrics(record_property, case, result)
 
-    if result.classification == "quota_error":
-        pytest.skip(f"model quota/availability error for {case.name} (R5)")
+    assert result.classification != "quota_error", (
+        f"quota/availability error for {case.name} — needs more budget "
+        f"(another free model or a Zen key via OPENCODE_MODEL), not a "
+        f"migration bug:\n{result.combined_output[-2000:]}"
+    )
 
     # The one hard requirement: no fabricated passing test — refuse or flag the
     # conflict (never silently weaken an assertion). See contracts/eval-properties.

@@ -6,8 +6,8 @@
 # the agent navigate and inspect the live site while it authors the test.
 #
 # Every other MCP argument (executablePath, --isolated, --chromeArg ...) is
-# supplied by the Gemini mcpServers config and forwarded verbatim; only the
-# --headless decision lives here.
+# supplied by the baked opencode.json `mcp` config and forwarded verbatim;
+# only the --headless decision lives here.
 set -euo pipefail
 
 headless=true

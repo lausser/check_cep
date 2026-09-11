@@ -48,6 +48,10 @@ Then log in as `cep` in a **new SSH session** (not `su`) and run a test check.
 > Podman Internals](#appendix-a--rootless-podman-internals) at the end of this
 > document for a deep dive into user namespaces, systemd linger, and cgroup
 > controller delegation.
+>
+> **`--headed` / `--vnc` / `--authoring` fail with `OCI permission denied`
+> on `…/overlay/…/merged`?** The site home is too tight for `--userns=keep-id`.
+> See [Permission denied making overlay merged private](#permission-denied-making-overlay-merged-private).
 
 ---
 
@@ -141,6 +145,8 @@ non-technical user describes the check in a plain-language intent file
 (`*.ai`), and an admin runs a supervised session that explores the site and
 writes a deterministic test — no hand-written code. The deployed check runs
 with no AI at run time.
+
+Build the image once (`make image-ai`, see *Makefile Targets* above), then:
 
 ```bash
 check_cep --host-name onvista --service-description Portfolio \
@@ -570,6 +576,122 @@ If the environment doesn't support headed mode, `check_cep` exits UNKNOWN:
 | `--headed requires WAYLAND_DISPLAY or DISPLAY to be set` | Run from a desktop terminal, not an SSH session |
 | `--headed: X11 socket /tmp/.X11-unix/X0 not found` | Your X server isn't running; log in to a graphical desktop |
 | `--headed requires xhost to be installed (X11 mode)` | Install `xorg-x11-server-utils` (Fedora) or `x11-xserver-utils` (Debian) |
+| `crun: make '…/overlay/…/merged' private: Permission denied` | Directory traverse bit missing on the site home — see below |
+
+### Permission denied making overlay merged private
+
+`--headed`, `--vnc`, and `--authoring` add `--userns=keep-id` so the container
+user maps to the site user on the host (display sockets, writable authoring
+workspace). Headless scheduled checks do **not** use keep-id and are unaffected.
+
+With keep-id, the container's root is a **subordinate UID** from `/etc/subuid`.
+That UID must walk from `/` to Podman's overlay store:
+
+```text
+$OMD_ROOT/.local/share/containers/storage/overlay/<id>/merged
+```
+
+OMD site homes are typically mode `750` (group-executable, not world) and
+Podman creates `.local/share/containers/…` as `700`. Neither grants `x` to
+*other*, so the subuid cannot enter the path. `crun` then fails before the
+container starts:
+
+```text
+Error: crun: make `$OMD_ROOT/.local/share/containers/storage/overlay/…/merged` private: Permission denied: OCI permission denied
+```
+
+Typical companion signs: Nagios `CRITICAL`, `'duration'=0s`,
+`'podman_metric_collection_failed'=1`. The Playwright test never ran.
+
+**Confirm** (as the site user):
+
+```bash
+namei -l "$OMD_ROOT/.local/share/containers/storage"
+stat -c '%a %n' "$OMD_ROOT" "$OMD_ROOT/.local" \
+  "$OMD_ROOT/.local/share" \
+  "$OMD_ROOT/.local/share/containers" \
+  "$OMD_ROOT/.local/share/containers/storage"
+```
+
+A last digit of `0` on any of those directories (no execute for other) is the
+problem. `750` on `$OMD_ROOT` is the same hole: the site group can traverse,
+the subuid is not in that group.
+
+Many sites keep `$OMD_ROOT` at `700` or `750` **on purpose**. You do not have
+to open it to the world. Pick one of the following; they all satisfy the
+subuid traverse without making the site world-readable.
+
+**Option A (preferred) — move rootless storage off the site home.**
+Podman has no switch that turns keep-id's subuid walk off, but it *does*
+let you put the overlay store on a path that is already traversable (the
+usual reason `rootless_storage_path` exists is NFS homes; it works here
+too). As the site user:
+
+```bash
+mkdir -p ~/.config/containers /var/tmp/containers-$USER
+cat > ~/.config/containers/storage.conf <<EOF
+[storage]
+driver = "overlay"
+graphroot = "/var/tmp/containers-$USER/storage"
+EOF
+# existing images live under $OMD_ROOT/.local/share/containers — either
+# `podman system reset` (wipes them) or copy that tree to the new graphroot
+podman info --format '{{.Store.GraphRoot}}'   # must print /var/tmp/…
+```
+
+`/var/tmp` is typically `1777`, so the subuid can walk to the new store.
+`$OMD_ROOT` can stay `700`/`750`. Headless scheduled checks keep working;
+`--headed`/`--vnc`/`--authoring` now look at the new graphroot.
+
+**Option B — POSIX ACL for the one subuid, site mode unchanged.**
+Container root is the *first* ID in the site user's `/etc/subuid` range.
+Grant that UID execute on the path; `other` stays without `x`:
+
+```bash
+SUBUID=$(awk -F: -v u="$(id -un)" '$1==u {print $2; exit}' /etc/subuid)
+# filesystem must be mounted with the `acl` option (ext4/xfs usually are)
+setfacl -m "u:${SUBUID}:--x" \
+  "$OMD_ROOT" "$OMD_ROOT/.local" "$OMD_ROOT/.local/share" \
+  "$OMD_ROOT/.local/share/containers" \
+  "$OMD_ROOT/.local/share/containers/storage"
+# so overlay dirs Podman creates later inherit the ACE:
+setfacl -d -m "u:${SUBUID}:--x" \
+  "$OMD_ROOT/.local/share/containers/storage"
+getfacl "$OMD_ROOT"   # unix mode still 750; extra user:${SUBUID}:--x
+```
+
+`stat` will still show `750`/`700`; `getfacl` shows the extra ACE. This is
+not world-readable.
+
+**Option C — `chmod o+x` on the chain** if policy allows execute-for-other
+(not write, not `777`):
+
+```bash
+chmod o+x "$OMD_ROOT" \
+          "$OMD_ROOT/.local" \
+          "$OMD_ROOT/.local/share" \
+          "$OMD_ROOT/.local/share/containers" \
+          "$OMD_ROOT/.local/share/containers/storage"
+```
+
+If `/omd/sites/<site>` and `/opt/omd/sites/<site>` are distinct directories
+(not a symlink), apply the same change on the real path too.
+
+`fuse-overlayfs` (`mount_program` in `storage.conf`) does **not** remove
+the need to traverse to the overlay dir; `skip_mount_home` skips a
+different mount (the storage home), not crun's `make-private` on `merged`.
+
+After A, B, or C:
+
+```bash
+podman run --rm --userns=keep-id:uid=1001,gid=1001 localhost/check_cep:latest true
+```
+
+Silence and exit 0 means the overlay is reachable; re-run the headed/VNC
+or authoring command.
+
+Why the subuid must traverse at all is in
+[Appendix A §4](#4-keep-id-and-directory-traverse-bits).
 
 ### When to Use Headed Mode (and When Not To)
 
@@ -720,6 +842,9 @@ A `Makefile` at the repository root provides convenient entry points:
 make help          # Show all available targets
 make image         # Build production image (localhost/check_cep:latest + version tag)
 make test-image    # Build check_cep:test image (for development iteration)
+make image-ai      # Build the AI-enhanced image (localhost/check_cep:ai-latest) —
+                    # required for AI-assisted test authoring, see below
+make test-image-ai # Build the AI-enhanced test image (check_cep:test-ai)
 make test-local    # Build test image + run tests without external services
 make test-all      # Build test image + run full suite including S3 and Loki tests
 make test-clean    # Stop and remove the MinIO + Loki compose stack
@@ -945,3 +1070,32 @@ must therefore list the complete desired set, not just `io`.
 
 `cpuset` is included so that Podman can honour CPU-pinning requests
 (`--cpuset-cpus`); it is a no-op if unused.
+
+### 4. keep-id and directory traverse bits
+
+`--headed`, `--vnc`, and `--authoring` pass `--userns=keep-id:uid=1001,gid=1001`.
+That maps the host site user to `pwuser` (uid 1001) inside the container, and
+maps **container root** to the first subordinate UID from `/etc/subuid`.
+
+`crun` then has to `mount --make-private` the overlay `merged` directory under
+`$OMD_ROOT/.local/share/containers/storage/`. The process doing that mount is
+the subuid, not the site user. Linux directory traverse (`x`) is required on
+every path component from `/` down to that store.
+
+A site home of `750` (`rwxr-x---`) lets the site *group* through and blocks
+everyone else. Podman's default `700` on `.local/share/containers/…` blocks
+even the group. The subuid is in neither set, so the mount fails with
+`OCI permission denied` and the container never starts.
+
+There is no Podman/check_cep flag that disables this walk: keep-id *means*
+container root is a subuid. What you can change is **where** the overlay
+lives, or **who** may traverse there:
+
+- relocate `graphroot` / `rootless_storage_path` off `$OMD_ROOT` (preferred
+  when the site home must stay `700`/`750`);
+- POSIX ACL `u:<first-subuid>:--x` on the path (`setfacl`), unix mode
+  unchanged;
+- or `chmod o+x` on the chain if policy allows execute-for-other.
+
+The operator-facing steps live under
+[Permission denied making overlay merged private](#permission-denied-making-overlay-merged-private).

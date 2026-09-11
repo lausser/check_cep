@@ -6,6 +6,129 @@ available in the next container image build.
 
 ---
 
+## Spec 022 — OpenCode CLI as Default AI Authoring Backend
+
+**Branch**: `022-opencode-authoring`
+
+### Summary
+
+Replaces `@google/gemini-cli` with the opencode CLI (`opencode-ai` npm
+package) as the AI backend driving the spec-020 authoring workflow
+(PREFLIGHT → AUTHOR → RUN → CRITIC → GATE → PACKAGE), defaulting to the free
+Zen model `opencode/big-pickle`. Gemini stays available as an *opencode
+provider connection* (`google/…` model + `GEMINI_API_KEY`) instead of a
+second CLI — the gemini CLI is removed from the image entirely. The default
+path is **keyless**: free Zen models need no credential and no billing. The
+generic `--environ NAME[=VALUE]` replaces the removed `--gemini-api-key`.
+Because a keyless default can't be gated on credential presence, the live
+eval is now gated by the explicit `CEP_AI_EVAL=1` opt-in; the "no AI
+credential on scheduled runs" guarantee is preserved and extended to both
+`OPENCODE_API_KEY` and `GEMINI_API_KEY`.
+
+### Verification status
+
+**This is the first time spec 021's 12-case eval has ever completed live, on
+any backend.** Full result: **12/12 pass** — all 9 positive cases (SC-001,
+SC-003) and all 3 adversarial cases (SC-002), the latter never previously
+executed live at all. SC-004 (clean GATE within `CEP_MAX_ITERATIONS`, not the
+900 s harness timeout), SC-005 (metrics record `model` and plausible
+turn/wall values), SC-006 (fast suite green with `CEP_AI_EVAL` unset, all 12
+cases skip), SC-007 (scheduled runs carry neither `OPENCODE_API_KEY` nor
+`GEMINI_API_KEY`, verified against a real container), and SC-008 (the Gemini
+connection works end-to-end and records the google model id) are all
+confirmed by real runs, not just unit tests.
+
+### Changed
+
+- `Makefile`: `OPENCODE_VERSION ?= 1.18.4` replaces `GEMINI_CLI_VERSION`.
+- `src/container/Dockerfile` (`ai` stage): installs `opencode-ai` instead of
+  `@google/gemini-cli`; bakes `/home/pwuser/.config/opencode/opencode.json`
+  (default model, workspace-scoped permissions, the `chrome-devtools` MCP
+  server, a read-only `critic` agent) instead of `.gemini/settings.json`;
+  third-party + local skills now live under `/home/pwuser/.agents/skills/`
+  only — opencode discovers them natively, so the `.gemini/skills` symlink
+  wiring is gone entirely.
+- `src/container/image/cep_authoring`: `AUTHOR` and `CRITIC` now invoke
+  `opencode run` (with a read-only `--agent critic`) instead of `gemini -p`;
+  `MODEL` defaults to `OPENCODE_MODEL:-opencode/big-pickle`; PREFLIGHT no
+  longer requires a credential unconditionally — it fails fast only when the
+  selected model is `google/…` and `GEMINI_API_KEY` is unset.
+- `src/check_cep`: `--gemini-api-key` removed; replaced by repeatable
+  `--environ NAME[=VALUE]` (bare `NAME` forwards the host env var's current
+  value so it never appears on the podman command line). `--environ` is
+  inert outside `--authoring` (warns, injects nothing). `--opencode-config
+  FILE` bind-mounts a providers/models overlay at
+  `/home/pwuser/.config/opencode/providers.json` and sets `OPENCODE_CONFIG`
+  so opencode merges it over the baked image config (MCP/critic/permissions
+  stay); authoring-only, missing file is exit 3.
+- `tests/integration/conftest.py`, `authoring_eval_support.py`,
+  `test_authoring_eval.py`: eval gate re-keyed from `requires_gemini_key`
+  (credential presence) to `requires_ai_eval` (`CEP_AI_EVAL=1`); a detected
+  quota/rate-limit event now **fails** the run immediately (no retry, no
+  skip/spread across days) — `CEP_EVAL_RETRIES` removed as dead code.
+- `.agents/skills/cep-test-authoring/SKILL.md`, `WRITING-TESTS.md`,
+  `tests/authoring-eval/README.md`: tool-name/CLI/env-var references updated
+  (opencode, keyless default, `--environ`, `CEP_AI_EVAL`); no semantic
+  guidance change (021 freeze).
+
+### Fixed
+
+Six real bugs surfaced by this feature's live runs — the first time any of
+this code path had ever executed to completion:
+
+- **AUTHOR never returned.** After finishing its work, opencode's agent tried
+  to invoke `cep_package` itself (correct guidance for a *supervised* session,
+  per the skill) and — denied by workspace containment — kept probing
+  alternate approaches instead of stopping, burning the full 900 s harness
+  timeout with nothing to show for it. Fixed with an explicit instruction in
+  the `AUTHOR` prompt (`cep_authoring`) to stop once `VERIFICATION.md` is
+  written and never touch anything outside the workspace.
+- **`cep_package` silent failure on intents with no `@`-references**
+  (pre-existing, predates spec 022 — confirmed via `git log`/`git show HEAD`,
+  never previously exercised by a live run on any backend): `grep -oE` exits 1 on
+  no matches, and under `pipefail`+`set -e` that silently killed the
+  packaging script before the archive was ever built, even after GATE had
+  passed. Fixed with `|| true` on the affected pipeline.
+- **Hardcoded credential fallback.** The AUTHOR wrote `?? 'Passw0rd!'` as a
+  fallback default (reasoning the sample app's own visible demo credentials
+  made it "safe"), and the critic non-deterministically approved it twice
+  running. Fixed with an explicit anti-hardcoded-fallback instruction in the
+  `AUTHOR` prompt, even for values that also appear as public demo defaults.
+- **`no_secret_leak()` false positive** in the eval harness: the check
+  flagged the intent file (`*.ai` — our own golden fixture, packaged verbatim
+  by `cep_package`'s contract) and `VERIFICATION.md`/`KNOWLEDGE.md`
+  (documentation) for prose-mentioning the known demo credential. Fixed in
+  `authoring_eval_support.py` to scan only real source/config files.
+- **`run_packaged_test` didn't mirror the authoring workspace layout.**
+  `cep_package`'s contract never bundles sibling fixture folders (real
+  deployments target live URLs, not local `file://` pages), so any
+  `file://`-based golden case lost its `journey`/`probes` folders when the
+  extracted package was re-run standalone. Fixed `extract_and_run` to copy
+  those siblings alongside the extracted package before running it.
+- **opencode's google provider reads `GOOGLE_GENERATIVE_AI_API_KEY`, not
+  `GEMINI_API_KEY`** — a wrong assumption in the original contract/plan,
+  never live-tested before this feature (US4). Fixed by bridging the
+  documented `--environ GEMINI_API_KEY` interface internally in
+  `cep_authoring`'s PREFLIGHT (`export
+  GOOGLE_GENERATIVE_AI_API_KEY="$GEMINI_API_KEY"`) — no external contract
+  change.
+
+Also fixed in passing: `tests/unit/conftest.py`'s shared `make_config()` test
+factory was missing the `authoring`/(now `environ`) `RunConfig` fields
+entirely — a pre-existing, unrelated bug (predates spec 022) that broke
+`test_run_context.py`/`test_cleanup.py` outright whenever anyone tried to use
+it; fixed alongside the field rename since it blocked verifying this spec's
+own fast-suite baseline.
+
+### Risk / rollback
+
+The AI image is the only thing that changes (base/scheduled image is
+untouched). Rollback: retag the previous `ai` image build, or `git revert`
+this branch's commits to restore the gemini-CLI path — no data migration, no
+schema changes, nothing to undo on already-deployed scheduled checks.
+
+---
+
 ## Spec 021 — AI Test-Authoring Hardening
 
 **Branch**: `021-ai-test-hardening`

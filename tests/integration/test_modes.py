@@ -338,7 +338,7 @@ def test_s3(
 
 
 # ---------------------------------------------------------------------------
-# Authoring mode (spec 020) — --authoring / --gemini-api-key
+# Authoring mode (spec 020/022) — --authoring / --environ / --opencode-config
 # ---------------------------------------------------------------------------
 #
 # The env-injection and mount behaviour is verified at the unit level by
@@ -364,7 +364,8 @@ _CONFIG_DEFAULTS = dict(
     debug=False,
     shell=False,
     authoring=False,
-    gemini_api_key=None,
+    environ=[],
+    opencode_config=None,
     headed=False,
     vnc=False,
     browser="chromium",
@@ -417,59 +418,153 @@ def _tests_mount(cmd):
     return None
 
 
-def test_authoring_env_and_mount(tmp_path, monkeypatch):
-    """--authoring injects GEMINI_API_KEY (from arg and from host env) and
-    switches the tests mount to the site-level dir, read-write. Plain --shell
-    and scheduled runs inject no key and keep the read-only mount. Authoring
-    with no resolvable key injects nothing (the warning is emitted in main())."""
+def _opencode_config_mount(cmd):
+    """Return the podman --volume spec that mounts the opencode overlay, or None."""
+    marker = ":" + cep.OPENCODE_CONFIG_CONTAINER_PATH + ":"
+    for i, tok in enumerate(cmd):
+        if tok == "--volume" and marker in cmd[i + 1]:
+            return cmd[i + 1]
+    return None
+
+
+def test_authoring_environ_passthrough_and_mount(tmp_path, monkeypatch):
+    """--authoring passes through --environ NAME=VALUE (explicit) and bare
+    NAME (host-forwarded, represented as a None sentinel so podman pulls the
+    value from its own process env — never on the podman command-line args,
+    contracts §5 ps hygiene) into the container, and switches the tests mount
+    to the site-level dir, read-write. Plain --shell and scheduled runs never
+    carry OPENCODE_API_KEY/GEMINI_API_KEY — structurally, since build_env_vars
+    only applies `environ` when ctx.config.authoring (SC-007) — and keep the
+    read-only mount."""
     omd_root = str(tmp_path)
     site = tmp_path / "etc" / "check_cep" / "tests" / "testhost"
     site.mkdir(parents=True)
 
-    # Ensure the host env key is controlled per-case.
-    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.setenv("GEMINI_API_KEY", "host-env-key-456")
 
-    # (1) authoring + --gemini-api-key: key injected, rw site-level mount
-    cfg = _make_config(authoring=True, shell=True, gemini_api_key="arg-key-123")
+    # (1) authoring + explicit --environ NAME=VALUE: value injected literally
+    cfg = _make_config(authoring=True, shell=True,
+                        environ=[("OPENCODE_MODEL", "opencode/big-pickle")])
     ctx = _make_ctx(cfg, omd_root)
     env = cep.build_env_vars(ctx)
     cmd = cep.build_podman_command(ctx, "podman", env)
-    assert env.get("GEMINI_API_KEY") == "arg-key-123"
+    assert env.get("OPENCODE_MODEL") == "opencode/big-pickle"
+    assert "OPENCODE_MODEL=opencode/big-pickle" in cmd
     mount = _tests_mount(cmd)
     assert mount is not None and mount.endswith(":/home/pwuser/tests:rw,z")
     assert str(site) in mount, f"expected site-level mount, got {mount}"
 
-    # (2) authoring + host env key (no arg): key injected from environment
-    monkeypatch.setenv("GEMINI_API_KEY", "host-env-key-456")
-    cfg = _make_config(authoring=True, shell=True)
-    ctx = _make_ctx(cfg, omd_root)
-    env = cep.build_env_vars(ctx)
-    assert env.get("GEMINI_API_KEY") == "host-env-key-456"
-    # arg takes precedence over host env
-    cfg = _make_config(authoring=True, shell=True, gemini_api_key="arg-wins")
-    assert cep.build_env_vars(_make_ctx(cfg, omd_root)).get("GEMINI_API_KEY") == "arg-wins"
-
-    # (3) authoring + no resolvable key: nothing injected
-    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
-    cfg = _make_config(authoring=True, shell=True)
-    assert "GEMINI_API_KEY" not in cep.build_env_vars(_make_ctx(cfg, omd_root))
-
-    # (4) plain --shell (not authoring): no key, read-only service-level mount
-    monkeypatch.setenv("GEMINI_API_KEY", "should-not-leak")
-    cfg = _make_config(shell=True, test_dir=str(tmp_path / "svc"))
+    # (2) authoring + bare --environ NAME: None sentinel, `--env NAME` (no
+    # `=value`) on the podman command — the resolved value never appears there
+    cfg = _make_config(authoring=True, shell=True,
+                        environ=[("GEMINI_API_KEY", None)])
     ctx = _make_ctx(cfg, omd_root)
     env = cep.build_env_vars(ctx)
     cmd = cep.build_podman_command(ctx, "podman", env)
-    assert "GEMINI_API_KEY" not in env
-    assert _tests_mount(cmd).endswith(":/home/pwuser/tests:ro,z")
+    assert env.get("GEMINI_API_KEY") is None
+    assert "GEMINI_API_KEY" in cmd
+    assert not any("GEMINI_API_KEY=" in tok for tok in cmd), \
+        "bare form must not put the value on the command line"
 
-    # (5) scheduled run (no shell/authoring): no key, read-only mount
-    cfg = _make_config(test_dir=str(tmp_path / "svc"))
+    # (3) authoring + no --environ at all: nothing extra injected (keyless
+    # default is the normal path, not a degraded one)
+    cfg = _make_config(authoring=True, shell=True)
+    env = cep.build_env_vars(_make_ctx(cfg, omd_root))
+    assert "GEMINI_API_KEY" not in env and "OPENCODE_API_KEY" not in env
+
+    # (4) plain --shell (not authoring): --environ entries are structurally
+    # inert — build_env_vars only applies them when ctx.config.authoring
+    cfg = _make_config(shell=True, test_dir=str(tmp_path / "svc"),
+                        environ=[("OPENCODE_API_KEY", "should-not-leak"),
+                                 ("GEMINI_API_KEY", "should-not-leak-either")])
     ctx = _make_ctx(cfg, omd_root)
     env = cep.build_env_vars(ctx)
     cmd = cep.build_podman_command(ctx, "podman", env)
-    assert "GEMINI_API_KEY" not in env
+    assert "OPENCODE_API_KEY" not in env and "GEMINI_API_KEY" not in env
     assert _tests_mount(cmd).endswith(":/home/pwuser/tests:ro,z")
+
+    # (5) scheduled run (no shell/authoring): neither credential var, read-only mount
+    cfg = _make_config(test_dir=str(tmp_path / "svc"),
+                        environ=[("OPENCODE_API_KEY", "should-not-leak"),
+                                 ("GEMINI_API_KEY", "should-not-leak-either")])
+    ctx = _make_ctx(cfg, omd_root)
+    env = cep.build_env_vars(ctx)
+    cmd = cep.build_podman_command(ctx, "podman", env)
+    assert "OPENCODE_API_KEY" not in env and "GEMINI_API_KEY" not in env
+    assert _tests_mount(cmd).endswith(":/home/pwuser/tests:ro,z")
+
+
+def test_opencode_config_overlay_mount_and_env(tmp_path):
+    """--authoring --opencode-config FILE bind-mounts the host file next to
+    the baked opencode.json (never over it) and sets OPENCODE_CONFIG to the
+    container overlay path so opencode merges providers/models on top."""
+    omd_root = str(tmp_path)
+    site = tmp_path / "etc" / "check_cep" / "tests" / "testhost"
+    site.mkdir(parents=True)
+    overlay = tmp_path / "cep-providers.json"
+    overlay.write_text('{"provider": {}}\n')
+
+    cfg = _make_config(authoring=True, shell=True,
+                       opencode_config=str(overlay))
+    ctx = _make_ctx(cfg, omd_root)
+    env = cep.build_env_vars(ctx)
+    cmd = cep.build_podman_command(ctx, "podman", env)
+
+    assert env.get("OPENCODE_CONFIG") == cep.OPENCODE_CONFIG_CONTAINER_PATH
+    assert f"OPENCODE_CONFIG={cep.OPENCODE_CONFIG_CONTAINER_PATH}" in cmd
+
+    mount = _opencode_config_mount(cmd)
+    assert mount is not None, f"expected overlay mount, cmd={cmd}"
+    assert mount.startswith(str(overlay) + ":")
+    assert mount.endswith(":" + cep.OPENCODE_CONFIG_CONTAINER_PATH + ":ro,z")
+    assert not any(
+        cmd[i] == "--volume"
+        and ":/home/pwuser/.config/opencode/opencode.json:" in cmd[i + 1]
+        for i in range(len(cmd) - 1)
+    ), "must not replace the baked opencode.json"
+
+
+def test_opencode_config_absent_injects_nothing(tmp_path):
+    """Without --opencode-config, authoring injects neither OPENCODE_CONFIG
+    nor an overlay mount."""
+    omd_root = str(tmp_path)
+    (tmp_path / "etc" / "check_cep" / "tests" / "testhost").mkdir(parents=True)
+    cfg = _make_config(authoring=True, shell=True)
+    ctx = _make_ctx(cfg, omd_root)
+    env = cep.build_env_vars(ctx)
+    cmd = cep.build_podman_command(ctx, "podman", env)
+    assert "OPENCODE_CONFIG" not in env
+    assert _opencode_config_mount(cmd) is None
+
+
+def test_opencode_config_wins_over_environ(tmp_path):
+    """--opencode-config sets OPENCODE_CONFIG after --environ, so a stray
+    --environ OPENCODE_CONFIG=… cannot point opencode at an unmounted path."""
+    omd_root = str(tmp_path)
+    (tmp_path / "etc" / "check_cep" / "tests" / "testhost").mkdir(parents=True)
+    overlay = tmp_path / "cep-providers.json"
+    overlay.write_text("{}\n")
+    cfg = _make_config(
+        authoring=True, shell=True,
+        opencode_config=str(overlay),
+        environ=[("OPENCODE_CONFIG", "/tmp/not-the-overlay.json")],
+    )
+    env = cep.build_env_vars(_make_ctx(cfg, omd_root))
+    assert env["OPENCODE_CONFIG"] == cep.OPENCODE_CONFIG_CONTAINER_PATH
+
+
+def test_opencode_config_inert_outside_authoring(tmp_path):
+    """Even if RunConfig carries opencode_config, non-authoring runs mount
+    and inject nothing (same structural guard as --environ)."""
+    overlay = tmp_path / "cep-providers.json"
+    overlay.write_text("{}\n")
+    cfg = _make_config(opencode_config=str(overlay),
+                       test_dir=str(tmp_path / "svc"))
+    ctx = _make_ctx(cfg, str(tmp_path))
+    env = cep.build_env_vars(ctx)
+    cmd = cep.build_podman_command(ctx, "podman", env)
+    assert "OPENCODE_CONFIG" not in env
+    assert _opencode_config_mount(cmd) is None
 
 
 # --- Subprocess helpers for the refusal / warning paths --------------------
@@ -495,11 +590,12 @@ def _fake_podman(tmp_path):
     return str(bin_dir)
 
 
-def _run_authoring(tmp_path, extra_args, extra_env=None):
+def _run_authoring(tmp_path, extra_args, extra_env=None, authoring=True):
     omd_root = tmp_path / "omd"
     omd_root.mkdir(exist_ok=True)
     env = {k: v for k, v in os.environ.items()}
     env.pop("GEMINI_API_KEY", None)
+    env.pop("OPENCODE_API_KEY", None)
     env["OMD_ROOT"] = str(omd_root)
     env["PATH"] = _fake_podman(tmp_path) + os.pathsep + env["PATH"]
     if extra_env:
@@ -510,8 +606,10 @@ def _run_authoring(tmp_path, extra_args, extra_env=None):
         "--service-description", "Portfolio",
         "--image", "check_cep:ai",
         "--probe-location", "local",
-        "--authoring",
-    ] + extra_args
+    ]
+    if authoring:
+        cmd.append("--authoring")
+    cmd += extra_args
     proc = subprocess.run(cmd, capture_output=True, text=True, timeout=60, env=env)
     return proc.stdout + proc.stderr, proc.returncode
 
@@ -532,10 +630,10 @@ def test_authoring_refuses_missing_workspace(tmp_path):
     assert "etc/check_cep/tests/testhost" in out
 
 
-def test_authoring_no_key_warns_but_starts(tmp_path):
-    """--authoring with no resolvable key still starts (exit 0 via fake podman)
-    but prints a visible not-functional warning and injects nothing."""
-    # Create the site-level workspace so validation passes.
+def test_authoring_keyless_starts_without_warning(tmp_path):
+    """--authoring with no --environ at all (the default, keyless free-tier
+    path) still starts cleanly (exit 0 via fake podman) with no credential
+    warning — keyless is the normal path, not a degraded one (spec 022)."""
     site = tmp_path / "omd" / "etc" / "check_cep" / "tests" / "testhost"
     site.mkdir(parents=True)
     result_dir = tmp_path / "results"
@@ -544,4 +642,61 @@ def test_authoring_no_key_warns_but_starts(tmp_path):
         ["--result-dir", str(result_dir)],
     )
     assert code == 0, out
-    assert "will not be functional" in out
+    assert "WARNING" not in out
+
+
+def test_authoring_environ_bare_missing_host_var_exits_3(tmp_path):
+    """Bare `--environ NAME` with an unset host var is a usage error, exit 3,
+    before any container starts (contracts §5)."""
+    site = tmp_path / "omd" / "etc" / "check_cep" / "tests" / "testhost"
+    site.mkdir(parents=True)
+    out, code = _run_authoring(tmp_path, ["--environ", "TOTALLY_UNSET_VAR_XYZ"])
+    assert code == 3, out
+    assert "TOTALLY_UNSET_VAR_XYZ" in out
+
+
+def test_authoring_environ_invalid_name_exits_3(tmp_path):
+    """A malformed --environ variable name is a usage error, exit 3."""
+    out, code = _run_authoring(tmp_path, ["--environ", "not a valid name=x"])
+    assert code == 3, out
+
+
+def test_environ_outside_authoring_warns_and_ignored(tmp_path):
+    """--environ without --authoring prints a warning; the variable is
+    ignored (never reaches any container — --shell has none to reach here,
+    verified structurally at the unit level above)."""
+    out, code = _run_authoring(
+        tmp_path,
+        ["--environ", "OPENCODE_MODEL=opencode/big-pickle"],
+        authoring=False,
+    )
+    assert "only takes effect with --authoring" in out
+
+
+def test_opencode_config_outside_authoring_warns_and_ignored(tmp_path):
+    """--opencode-config without --authoring prints a warning and does not
+    fail the run (safe default for templated commands)."""
+    overlay = tmp_path / "cep-providers.json"
+    overlay.write_text("{}\n")
+    out, code = _run_authoring(
+        tmp_path,
+        ["--opencode-config", str(overlay)],
+        authoring=False,
+    )
+    assert code == 0, out
+    assert "only takes effect with --authoring" in out
+
+
+def test_opencode_config_missing_file_exits_3(tmp_path):
+    """--authoring --opencode-config pointing at a missing file is a usage
+    error (exit 3) before any container starts."""
+    site = tmp_path / "omd" / "etc" / "check_cep" / "tests" / "testhost"
+    site.mkdir(parents=True)
+    missing = tmp_path / "no-such-providers.json"
+    out, code = _run_authoring(
+        tmp_path,
+        ["--opencode-config", str(missing)],
+    )
+    assert code == 3, out
+    assert "not a file" in out
+    assert str(missing) in out or "no-such-providers.json" in out

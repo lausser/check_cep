@@ -46,13 +46,16 @@ cp -a "$TESTDIR/." "$DEST/"
 # Intent file + its @-referenced attachments, from the workspace root.
 if [ -f "$WORKSPACE/$TESTNAME.ai" ]; then
     cp -a "$WORKSPACE/$TESTNAME.ai" "$DEST/"
+    # `grep -oE` exits 1 when the intent has no @-references (most text-only
+    # intents) — under `pipefail` that would kill this script via `set -e`
+    # before the archive is ever built, so tolerate "no matches" explicitly.
     grep -oE '@[[:alnum:]._/-]+' "$WORKSPACE/$TESTNAME.ai" | sed 's/^@//' | while read -r ref; do
         [ -n "$ref" ] || continue
         if [ -f "$WORKSPACE/$ref" ]; then
             mkdir -p "$DEST/$(dirname "$ref")"
             cp -a "$WORKSPACE/$ref" "$DEST/$ref"
         fi
-    done
+    done || true
 fi
 
 # KNOWLEDGE.md snapshot from the workspace root.

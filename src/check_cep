@@ -48,6 +48,11 @@ DEFAULT_CPU_COUNT = 2  # Hardcoded intentional (FR-006)
 CONTAINER_UID = 1001
 CONTAINER_GID = 1001
 
+# Authoring overlay: host --opencode-config is bind-mounted here (not over the
+# baked ~/.config/opencode/opencode.json) and pointed at by OPENCODE_CONFIG so
+# opencode deep-merges providers/models on top of MCP/critic/permissions.
+OPENCODE_CONFIG_CONTAINER_PATH = "/home/pwuser/.config/opencode/providers.json"
+
 # Cgroup v2 resource monitoring
 CGROUP_POLL_INTERVAL_SEC = 0.250  # 4 samples/sec
 CGROUP_BASE_PATH = "/sys/fs/cgroup"
@@ -238,8 +243,14 @@ class RunConfig:
     vnc: bool
     browser: str
 
-    # AI authoring credential (injected only in authoring mode)
-    gemini_api_key: Optional[str]
+    # AI authoring env passthrough (injected only in authoring mode).
+    # List of (name, value-or-None); None means "forward the host env var's
+    # current value" (bare `--environ NAME` form, keeps secrets out of ps).
+    environ: List[Tuple[str, Optional[str]]]
+
+    # Host path of an opencode config overlay (providers/models). Authoring
+    # only; None means no overlay. Stored as an absolute path after validation.
+    opencode_config: Optional[str]
 
     # Reporting
     report_url: Optional[str]
@@ -541,6 +552,31 @@ def parse_retention(value: str) -> int:
     return hours * 3600
 
 
+_ENVIRON_NAME_RE = re.compile(r'^[A-Za-z_][A-Za-z0-9_]*$')
+
+
+def parse_environ_arg(raw: str) -> Tuple[str, Optional[str]]:
+    """Parse one `--environ NAME[=VALUE]` argument into (name, value-or-None).
+
+    A None value means the bare form: forward the host env var's current
+    value at container-start time instead of embedding it here (contracts
+    §5, ps hygiene). Raises ValueError (caller turns this into a usage exit)
+    on a malformed name or an unset host var in bare form.
+    """
+    if "=" in raw:
+        name, value = raw.split("=", 1)
+    else:
+        name, value = raw, None
+    if not _ENVIRON_NAME_RE.match(name):
+        raise ValueError(f"--environ: invalid variable name: {name!r}")
+    if value is None and name not in os.environ:
+        raise ValueError(
+            f"--environ {name}: bare form requires the host environment "
+            f"variable to be set"
+        )
+    return name, value
+
+
 def run_cleanup(plugin: ReportCleanupPlugin, ctx: RunContext) -> CleanupResult:
     """Delete eligible old run directories oldest-first within the timeout budget."""
     parent_dir = os.path.dirname(ctx.result_dir)
@@ -569,8 +605,14 @@ def run_cleanup(plugin: ReportCleanupPlugin, ctx: RunContext) -> CleanupResult:
 # Container environment variable assembly
 # ---------------------------------------------------------------------------
 
-def build_env_vars(ctx: RunContext) -> Dict[str, str]:
-    """Build container environment variable dict from run context."""
+def build_env_vars(ctx: RunContext) -> Dict[str, Optional[str]]:
+    """Build container environment variable dict from run context.
+
+    A value of None means "bare passthrough": `--env NAME` (no `=value`) is
+    passed to podman so podman itself forwards the name from its own process
+    environment — the value never appears in the podman command-line args
+    (ps hygiene) for the `--environ NAME` bare form.
+    """
     env = {
         "TEST_SOURCE": ctx.config.test_source,
         "RESULT_DEST": ctx.config.result_dest,
@@ -627,15 +669,17 @@ def build_env_vars(ctx: RunContext) -> Dict[str, str]:
     if ctx.config.current_status:
         env["NAGIOS_CURRENT_STATUS"] = ctx.config.current_status
 
-    # AI authoring credential (spec 020, FR-020/FR-021). Injected ONLY when
-    # authoring mode is active, and only when a key is resolvable (arg → host
-    # env). Scheduled runs and plain --shell never carry this. When no key is
-    # resolvable, authoring still starts (warning emitted in main()) but the AI
-    # assistant is non-functional — nothing is injected here.
+    # AI authoring env passthrough (spec 022, contracts/authoring-backend.md
+    # §5). `--environ` takes effect ONLY in authoring mode; scheduled runs and
+    # plain --shell never carry these. Outside authoring mode a warning was
+    # already emitted in main() — nothing is injected here either way.
     if ctx.config.authoring:
-        gemini_key = ctx.config.gemini_api_key or os.environ.get("GEMINI_API_KEY")
-        if gemini_key:
-            env["GEMINI_API_KEY"] = gemini_key
+        for name, value in ctx.config.environ:
+            env[name] = value
+        # Overlay path wins over a stray `--environ OPENCODE_CONFIG=…` so the
+        # bind-mounted file is what opencode actually reads.
+        if ctx.config.opencode_config:
+            env["OPENCODE_CONFIG"] = OPENCODE_CONFIG_CONTAINER_PATH
 
     return env
 
@@ -662,7 +706,7 @@ def authoring_workspace_dir(ctx: RunContext) -> str:
 # ---------------------------------------------------------------------------
 
 def build_podman_command(ctx: RunContext, container_bin: str,
-                         env_vars: Dict[str, str]) -> List[str]:
+                         env_vars: Dict[str, Optional[str]]) -> List[str]:
     """Build complete podman run command."""
     cgroup_parent = ctx.container_name.replace("-", "_") + ".slice"
 
@@ -684,9 +728,14 @@ def build_podman_command(ctx: RunContext, container_bin: str,
         memory_limit += "g"
     cmd.extend(["--memory", memory_limit])
 
-    # Environment variables
+    # Environment variables. A None value is the bare-passthrough form: pass
+    # `--env NAME` so podman pulls the value from its own process environment
+    # instead of the value appearing in these command-line args (ps hygiene).
     for key, value in env_vars.items():
-        cmd.extend(["--env", f"{key}={value}"])
+        if value is None:
+            cmd.extend(["--env", key])
+        else:
+            cmd.extend(["--env", f"{key}={value}"])
 
     # Conditional volume mounts
     if ctx.config.authoring:
@@ -695,6 +744,11 @@ def build_podman_command(ctx: RunContext, container_bin: str,
         # folders. Gated behind --authoring; scheduled runs never take this path.
         cmd.extend(["--volume",
                     f"{authoring_workspace_dir(ctx)}:/home/pwuser/tests:rw,z"])
+        # Provider/model overlay — beside the baked opencode.json, never over it.
+        if ctx.config.opencode_config:
+            cmd.extend(["--volume",
+                        f"{ctx.config.opencode_config}:"
+                        f"{OPENCODE_CONFIG_CONTAINER_PATH}:ro,z"])
     elif ctx.config.test_source == "local":
         if ctx.config.test_artifact:
             local_path = ctx.config.test_artifact
@@ -1370,8 +1424,11 @@ def build_argument_parser() -> ArgumentParser:
     parser.add_argument("--authoring", action="store_true", default=False,
                         help="Enter AI-assisted test authoring mode (implies shell "
                              "semantics; intended for the 'ai' image). Mounts the "
-                             "site-level tests dir read-write and injects "
-                             "GEMINI_API_KEY. Never affects scheduled runs.")
+                             "site-level tests dir read-write. Keyless by default "
+                             "(free opencode/big-pickle model); use --environ for "
+                             "paid Zen or Gemini connections and --opencode-config "
+                             "to overlay extra providers. Never affects "
+                             "scheduled runs.")
     parser.add_argument("--headed", action="store_true", default=False,
                         help="Run browsers in headed mode (Wayland/X11 auto-detected, debug only)")
     parser.add_argument("--vnc", action="store_true", default=False,
@@ -1406,11 +1463,25 @@ def build_argument_parser() -> ArgumentParser:
     parser.add_argument("--loki-password", dest="loki_password", default=None)
     parser.add_argument("--loki-proxy", dest="loki_proxy", default=None)
 
-    # AI authoring credential (only used in --authoring mode)
-    parser.add_argument("--gemini-api-key", dest="gemini_api_key", default=None,
-                        help="Gemini API key for AI-assisted authoring mode. "
-                             "Falls back to the host GEMINI_API_KEY env var. "
-                             "Injected into the container only with --authoring.")
+    # AI authoring env passthrough (only takes effect in --authoring mode)
+    parser.add_argument("--environ", dest="environ", action="append", default=[],
+                        metavar="NAME[=VALUE]",
+                        help="Pass an env var into the authoring container "
+                             "(repeatable). NAME=VALUE sets it directly; bare "
+                             "NAME forwards the host env var's current value "
+                             "(keeps secrets out of `ps`). Only takes effect "
+                             "with --authoring (ignored elsewhere, with a "
+                             "warning). Examples: "
+                             "--environ OPENCODE_MODEL=opencode/big-pickle, "
+                             "--environ GEMINI_API_KEY")
+    parser.add_argument("--opencode-config", dest="opencode_config", default=None,
+                        metavar="FILE",
+                        help="Host path to an opencode config overlay (providers/"
+                             "models JSON). Bind-mounted read-only and merged by "
+                             "opencode on top of the baked image config via "
+                             "OPENCODE_CONFIG — does not replace MCP, critic, or "
+                             "permissions. Only takes effect with --authoring "
+                             "(ignored elsewhere, with a warning).")
 
     # Naemon state
     parser.add_argument("--current-status", dest="current_status", default=None,
@@ -1429,6 +1500,33 @@ def main() -> int:
     # execute_container) is reused; authoring adds only the rw mount + env key.
     if args.authoring:
         args.shell = True
+
+    # Parse --environ NAME[=VALUE] args before any container starts (spec 022,
+    # contracts/authoring-backend.md §5). A malformed name or an unset host
+    # var in bare form is a usage error (exit 3, before any container start).
+    try:
+        environ = [parse_environ_arg(raw) for raw in args.environ]
+    except ValueError as exc:
+        return nagios_exit("UNKNOWN", str(exc))
+    if environ and not args.authoring:
+        print("WARNING: --environ only takes effect with --authoring; "
+              "ignored in this mode.", file=sys.stderr, flush=True)
+
+    # --opencode-config: resolve and existence-check only in authoring mode.
+    # Outside authoring it is inert (warning), matching --environ, so a
+    # templated Naemon command cannot UNKNOWN a scheduled check.
+    opencode_config = None
+    if args.opencode_config:
+        if not args.authoring:
+            print("WARNING: --opencode-config only takes effect with "
+                  "--authoring; ignored in this mode.",
+                  file=sys.stderr, flush=True)
+        else:
+            opencode_config = os.path.abspath(args.opencode_config)
+            if not os.path.isfile(opencode_config):
+                return nagios_exit(
+                    "UNKNOWN",
+                    f"--opencode-config is not a file: {opencode_config}")
 
     # Capture process start time before any path resolution so %t is available
     start_time = time.time()
@@ -1455,7 +1553,8 @@ def main() -> int:
         debug=args.debug,
         shell=args.shell,
         authoring=args.authoring,
-        gemini_api_key=args.gemini_api_key,
+        environ=environ,
+        opencode_config=opencode_config,
         headed=args.headed,
         vnc=args.vnc,
         browser=args.browser,
@@ -1606,13 +1705,6 @@ def main() -> int:
                                "(create the site-level tests directory, e.g. "
                                "$OMD_ROOT/etc/check_cep/tests/<host>, or pass "
                                "--test-dir)")
-        # A missing key is not fatal — authoring still starts so the operator can
-        # explore — but the AI assistant will not work. Warn visibly.
-        if not (config.gemini_api_key or os.environ.get("GEMINI_API_KEY")):
-            print("WARNING: --authoring started without a Gemini API key "
-                  "(neither --gemini-api-key nor GEMINI_API_KEY set); the AI "
-                  "assistant will not be functional in this session.",
-                  file=sys.stderr, flush=True)
 
     # ---------------------------------------------------------------------------
     # PID file concurrency check
