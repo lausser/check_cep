@@ -1,5 +1,29 @@
 <!--
-Sync Impact Report (2026-10-26, spec 023)
+Sync Impact Report (2026-10-26, spec 023, amendment 2)
+- Version change: 2.1.0 → 2.2.0 (MINOR: material expansion, clarified
+  responsibilities; no principle removed)
+- Amended principles:
+  - I. Separation of Concerns — explicit split of responsibilities between
+    host and run.py (resolves "result evaluation" vs. the exit-code
+    protocol); "thin dispatcher" replaced by a defined scope; shared helper
+    modules (`_*.py`) legitimized
+  - II. Container as Test Executor — tests run in the merged test tree
+  - III. Monitoring Compatibility — second check_dopla deviation stated
+    (report errors win over WARNING)
+  - IV. Container I/O Contract — layers mounted read-only, writable merged
+    test tree, run modes, `--prepare-only` entry mode, acquisition time
+    budget, environment composition and delivery, `layers` in
+    test-meta.json, crash safety of the exit-code protocol
+  - V. Security by Default — read-only sources vs. writable merged tree;
+    operator-supplied variables and secret hygiene
+  - Technical Constraints — local archives; Development Workflow — the
+    interface rule applies to every change, not only refactorings
+- Templates requiring updates: none
+- Approval: Gerhard Lausser (maintainer), 2026-10-26 20:32 CET; this
+  approval also covers 2.1.0
+- Follow-up TODOs: none
+
+Previous report (2026-10-26, spec 023, amendment 1)
 - Version change: 2.0.0 → 2.1.0 (MINOR: material expansion)
 - Amended principles:
   - II. Container as Test Executor — the container no longer passes
@@ -17,8 +41,7 @@ Sync Impact Report (2026-10-26, spec 023)
 - Unchanged principles: I, V
 - Templates requiring updates: none (plan/spec/tasks templates
   compatible)
-- Follow-up TODOs: spec 023 T004 applies the remaining Principle IV
-  changes (layers, merged test tree, run modes) as 2.2.0
+- Follow-up TODOs: completed by 2.2.0
 
 Previous report (2026-03-04)
 - Version change: 1.0.0 → 2.0.0
@@ -47,14 +70,26 @@ Previous report (2026-03-04)
 
 ### I. Separation of Concerns
 
-The `check_cep` host-side plugin MUST handle CLI argument parsing,
-container lifecycle management (start, wait, cleanup), result
-evaluation, and Nagios output formatting. The container-side
-`run.py` MUST be a thin dispatcher that delegates to pluggable
-Python modules for test acquisition, result delivery, and log
-shipping. Each plugin module (e.g. `source_local.py`,
-`dest_s3.py`, `logging_loki.py`) MUST own its concern end-to-end
-as a separate file with no cross-plugin dependencies.
+The `check_cep` host-side plugin MUST handle CLI argument parsing
+and validation (everything that can be checked before a container
+starts), container lifecycle management (start, wait, cleanup),
+the Nagios status classification (Principle III) and Nagios output
+formatting.
+
+The container-side `run.py` MUST orchestrate exactly these steps:
+prepare the merged test tree (through the selected source plugin),
+determine the run mode, run Playwright, translate the outcome into
+the exit-code protocol (Principle IV, including the report-based
+rules that protocol names), write `test-meta.json`, and hand results
+and logs to the delivery and logging plugins. `run.py` MUST NOT
+contain transport logic and MUST NOT format Nagios output.
+
+Each plugin module (e.g. `source_local.py`, `dest_s3.py`,
+`logging_loki.py`) MUST own its concern end-to-end as a separate
+file with no dependency on another plugin. Shared helper modules
+(file name starting with `_`, e.g. `_shared.py`, `_layers.py`) MAY be
+imported by plugins and by `run.py`; they MUST NOT import a plugin
+and MUST NOT be selectable as a plugin.
 
 Transport logic (S3 downloads/uploads, Loki shipping) MAY reside
 inside the container when it operates on artefacts already present
@@ -64,9 +99,12 @@ separation goal.
 
 **Rationale**: Clean separation between host orchestration and
 container-side plugin dispatch keeps each component focused and
-independently testable. Plugin modules are isolated files that
-can be developed, tested, and replaced without touching `run.py`
-or `check_cep`.
+independently testable. The container knows the test run, the host
+knows the monitoring semantics: the container reports *what happened*
+as a protocol code, the host decides *what it means* for Nagios.
+Plugin modules are isolated files that can be developed, tested, and
+replaced without touching `run.py` or `check_cep`, as long as they
+satisfy the shared plugin protocol.
 
 ### II. Container as Test Executor
 
@@ -76,7 +114,8 @@ the fundamental purpose of CEP — monitoring real web applications.
 
 The container MUST:
 
-- Execute `npx playwright test` against the test files in `/tests`.
+- Execute `npx playwright test` in the merged test tree
+  `/home/pwuser/tests`, following the run mode (Principle IV).
 - Write structured results to `/results`.
 - Translate the run's outcome into the container exit-code protocol
   (Principle IV). Playwright's raw exit code (from `npx playwright
@@ -134,8 +173,11 @@ Each branch of this classification MUST be covered by unit tests.
 The mapping follows the production-proven sibling plugin
 check_dopla (`PODMAN_FAILURE_CODES`, `_determine_exit_code`), whose
 codes were learned from real-life failures; deviations from it
-MUST be stated explicitly (deliberate deviation: OOM is UNKNOWN,
-not CRITICAL).
+MUST be stated explicitly. Deliberate deviations: (1) an OOM kill
+is UNKNOWN, not CRITICAL; (2) an `errors` entry in the report of a
+passed run is CRITICAL even when a visible-stderr WARNING was
+already determined (check_dopla only escalates while the status is
+still OK).
 
 **Rationale**: The plugin runs within Naemon/Nagios and MUST
 integrate seamlessly. Non-compliant output breaks alerting,
@@ -150,33 +192,59 @@ The container boundary MUST follow a documented contract. Volume
 mounts are conditional on the active plugin mode:
 
 **Mounts (conditional)**:
-- `/tests` — test scripts directory. Three cases:
-  1. `--test-source=local` + directory artifact: host directory mounted
-     directly at `/home/pwuser/tests` (ro).
-  2. `--test-source=local` + `.tgz`/`.tar.gz` artifact: archive mounted
-     at `/home/pwuser/input-artifact.tgz` (ro); `/tests` NOT pre-mounted —
-     `source_local.py` extracts the archive to `/home/pwuser/tests` at
-     container startup.
-  3. `--test-source=s3`: neither `/tests` nor the archive is pre-mounted —
-     `source_s3.py` downloads from S3 into the `testscripts-cache` volume
-     and extracts to `/home/pwuser/tests` at container startup.
+- `/home/pwuser/layers/NN[.tgz]` — test **layers**
+  (`--test-source=local`): each `--test-artifact` (directory or
+  `.tgz`/`.tar.gz`), mounted **read-only**, `NN` = position on the
+  command line. Layer sources are never writable and never modified
+  by a run.
+- `/home/pwuser/tests` — the **merged test tree**: built per run inside
+  the container by the active source plugin (all local layers merged
+  in order, a later layer wins; or the single S3 archive), **writable**,
+  discarded with the container. It is never bind-mounted, except the
+  site authoring workspace in `--authoring` mode (rw).
 - `/results` — results output directory. Host-mounted (rw) when
   `--result-dest=local`; container-internal when `--result-dest=s3`.
 - `/testscripts-cache` — S3 test script cache. Host-mounted (rw)
   when `--test-source=s3` only.
+
+**Entry modes** of `run.py`:
+- default (image `CMD`): prepare the merged test tree, run Playwright,
+  write results.
+- `--prepare-only`: prepare the merged test tree and determine the run
+  mode exactly as the default mode does, then exit 0 (or 3 on error)
+  without running tests. Used by `check_cep --shell`.
+
+**Run mode**: if the root of the merged test tree contains a
+Playwright config file, Playwright runs at the root with that config
+and the config decides which tests run (project-root mode).
+Otherwise `run.py` selects the test directory deterministically, as
+documented in the container I/O contract (discovery mode).
+
+**Time budget**: acquiring and merging the test tree counts toward
+`PWTIMEOUT`. Source plugins receive the deadline explicitly and MUST
+respect it; exceeding it is a protocol code 3.
 
 **Output files** (written to `/results`):
 - `steps.json` — Playwright JSON reporter output.
 - `test-meta.json` — runtime metadata (v2 schema): `started`
   (Unix epoch of host process start, from `CEP_STARTED` env var),
   `finished` (Unix epoch at write time), hostname, service,
-  exit code, duration, probe location, status.
+  exit code, duration, probe location, status, and `layers`
+  (position, host path, type — never contents or injected values).
 - `playwright-report/` — HTML report directory.
 - `screenshots/` — failure screenshots.
 
-**Environment variables**: Configuration from `check_cep` is passed
-via `--env` flags (plugin selectors, Nagios identifiers, timeout,
-plugin-specific credentials when applicable). Key variables:
+**Environment variables**: The container environment consists of
+exactly three sources: (1) the image defaults plus the variables the
+container runtime always sets, (2) the infrastructure variables
+`check_cep` sets (plugin selectors, Nagios identifiers, timeout, the
+layer list, plugin credentials when applicable, display variables in
+headed mode), (3) operator-supplied variables (`--environ
+NAME[=VALUE]`, all modes). Implicit forwarding of host variables by
+the container runtime MUST be disabled. Values MUST NOT appear in the
+container runtime's argv; the delivery mechanism is documented in the
+container I/O contract. Names the plugin
+sets itself are reserved and rejected for `--environ`. Key variables:
 - `CEP_STARTED` — Unix epoch integer string of the host-side
   `check_cep` process start time. Used by `run.py` to populate
   `test-meta.json["started"]` and to identify the run directory
@@ -195,14 +263,24 @@ exactly one of:
 - `3` — the tests could not run properly; `run.py` prints
   `CEPUNKNOWN [[[<message>]]]` on stdout before exiting.
 
+Raw codes of the Playwright process are mapped by a fixed table
+(documented in the container I/O contract); in particular a raw 3 is
+never passed through. The protocol MUST hold for every way `run.py`
+can end: a top-level boundary MUST turn any uncaught exception, and
+any exit that did not come from the protocol itself, into `3` with a
+`CEPUNKNOWN` message — never Python's default exit code 1 (which
+would read as WARNING). Protocol exits MUST pass this boundary
+unchanged and without a second marker.
+
 The host maps this protocol and the runtime's own codes to a
 Nagios status per Principle III (Status classification).
 
 Changes to this contract MUST be reviewed before implementation.
 
 **Rationale**: A well-defined, documented contract keeps the host
-and container sides decoupled. Conditional mounts reduce attack
-surface when S3 plugins handle transport internally.
+and container sides decoupled. Conditional, read-only source mounts
+reduce attack surface and guarantee that a run never changes its
+own test source.
 
 ### V. Security by Default
 
@@ -210,11 +288,21 @@ All container executions MUST apply the principle of least
 privilege within the constraints of E2E browser testing:
 
 - Container MUST run as a non-root user (`pwuser`).
-- Container filesystem SHOULD be read-only where feasible.
-- Credentials (S3, Loki) MUST only be passed into the container
-  when the operator explicitly selects a plugin that requires
-  them. The default configuration (`--test-source local`,
-  `--result-dest local`, `--logging none`) passes no credentials.
+- Test sources MUST be mounted read-only and MUST NOT be modified by
+  a run. The merged test tree is the only writable test location; it
+  lives in the container's own filesystem and is discarded with the
+  container. The rest of the container filesystem SHOULD be
+  read-only where feasible.
+- Plugin credentials (S3, Loki, registry) MUST only be used when the
+  operator explicitly selects a plugin that requires them. The
+  default configuration (`--test-source local`, `--result-dest
+  local`, `--logging none`, no `--environ`) passes no credentials.
+- Operator-supplied variables reach the container only when named
+  explicitly, one `--environ` per variable; no other host variable
+  is forwarded.
+- Secret values (explicit `--environ` values, plugin credentials)
+  MUST NOT appear in the container runtime's argv or in plugin log
+  output, and MUST be masked in the Nagios output.
 - Host-side file permissions MUST restrict artifact directories
   to the monitoring site user.
 - Resource limits (memory, CPU) MUST be enforced via cgroups.
@@ -236,8 +324,10 @@ only present when explicitly configured.
   Naemon core.
 - **Host OS**: Linux (RHEL/Fedora family expected, but not
   mandated).
-- **Test archive format**: `.tgz` (gzip-compressed tar) for S3
-  transport (`source_s3.py`). Local test source uses a directory.
+- **Test archive format**: gzip-compressed tar for S3 transport and
+  for local archive layers; local layers may also be directories.
+  No archive member, link or file may resolve outside the merged
+  test tree.
 
 ## Development Workflow
 
@@ -250,9 +340,11 @@ only present when explicitly configured.
 - Code that touches exit-code interpretation or perfdata formatting
   MUST include test coverage verifying Nagios compatibility
   (Principle III).
-- Refactoring MUST NOT change the plugin's external interface
-  (command-line arguments, exit codes, output format) without
-  a constitution amendment.
+- No change — feature or refactoring — may alter the plugin's
+  external interface (command-line arguments and their semantics,
+  exit codes and their meaning, output format) unless the change is
+  listed in CHANGES.md. A change that contradicts a principle
+  requires a constitution amendment first.
 
 ## Governance
 
@@ -276,4 +368,4 @@ proposals MUST verify compliance with the principles above.
 note confirming which principles were considered and how compliance
 was ensured.
 
-**Version**: 2.1.0 | **Ratified**: 2026-03-02 | **Last Amended**: 2026-10-26
+**Version**: 2.2.0 | **Ratified**: 2026-03-02 | **Last Amended**: 2026-10-26
