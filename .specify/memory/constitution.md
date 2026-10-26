@@ -5,7 +5,7 @@ Sync Impact Report (2026-10-26, spec 023, amendment 3)
   no semantic change)
 - Amended principles: II, IV (wording only)
 - Templates requiring updates: none
-- Approval: pending (maintainer)
+- Approval: Gerhard Lausser (maintainer), 2026-10-26 21:05 CET
 - Follow-up TODOs: none
 
 Previous report (2026-10-26, spec 023, amendment 2)
