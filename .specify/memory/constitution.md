@@ -1,5 +1,14 @@
 <!--
-Sync Impact Report (2026-10-26, spec 023, amendment 2)
+Sync Impact Report (2026-10-26, spec 023, amendment 3)
+- Version change: 2.2.0 → 2.2.1 (PATCH: container paths spelled as in
+  the code — `/home/pwuser/results`, `/home/pwuser/testscripts-cache`;
+  no semantic change)
+- Amended principles: II, IV (wording only)
+- Templates requiring updates: none
+- Approval: pending (maintainer)
+- Follow-up TODOs: none
+
+Previous report (2026-10-26, spec 023, amendment 2)
 - Version change: 2.1.0 → 2.2.0 (MINOR: material expansion, clarified
   responsibilities; no principle removed)
 - Amended principles:
@@ -116,13 +125,13 @@ The container MUST:
 
 - Execute `npx playwright test` in the merged test tree
   `/home/pwuser/tests`, following the run mode (Principle IV).
-- Write structured results to `/results`.
+- Write structured results to `/home/pwuser/results`.
 - Translate the run's outcome into the container exit-code protocol
   (Principle IV). Playwright's raw exit code (from `npx playwright
   test`, the `timeout` wrapper or a signal) MUST NOT be passed through
   unchanged.
 - Minimise non-Playwright side effects (no persistent state beyond
-  `/results` and `/testscripts-cache`).
+  `/home/pwuser/results` and `/home/pwuser/testscripts-cache`).
 
 Plugin modules inside the container MAY perform network operations
 (S3 downloads, S3 uploads, Loki shipping) when explicitly selected
@@ -202,9 +211,9 @@ mounts are conditional on the active plugin mode:
   in order, a later layer wins; or the single S3 archive), **writable**,
   discarded with the container. It is never bind-mounted, except the
   site authoring workspace in `--authoring` mode (rw).
-- `/results` — results output directory. Host-mounted (rw) when
+- `/home/pwuser/results` — results output directory. Host-mounted (rw) when
   `--result-dest=local`; container-internal when `--result-dest=s3`.
-- `/testscripts-cache` — S3 test script cache. Host-mounted (rw)
+- `/home/pwuser/testscripts-cache` — S3 test script cache. Host-mounted (rw)
   when `--test-source=s3` only.
 
 **Entry modes** of `run.py`:
@@ -224,7 +233,7 @@ documented in the container I/O contract (discovery mode).
 `PWTIMEOUT`. Source plugins receive the deadline explicitly and MUST
 respect it; exceeding it is a protocol code 3.
 
-**Output files** (written to `/results`):
+**Output files** (written to `/home/pwuser/results`):
 - `steps.json` — Playwright JSON reporter output.
 - `test-meta.json` — runtime metadata (v2 schema): `started`
   (Unix epoch of host process start, from `CEP_STARTED` env var),
@@ -368,4 +377,4 @@ proposals MUST verify compliance with the principles above.
 note confirming which principles were considered and how compliance
 was ensured.
 
-**Version**: 2.2.0 | **Ratified**: 2026-03-02 | **Last Amended**: 2026-10-26
+**Version**: 2.2.1 | **Ratified**: 2026-03-02 | **Last Amended**: 2026-10-26
