@@ -3,12 +3,15 @@
 Downloads a .tgz test archive from S3 using the explicit artifact path given
 in TEST_ARTIFACT (format: /bucket/path/to/testfolder.tgz).  Caches the
 downloaded archive under testscripts-cache/ mirroring the artifact path to
-avoid redundant downloads.  Unpacks into ~/tests.
+avoid redundant downloads.  Unpacks into ~/tests through the shared safe
+extraction (spec 023 FR-024); the download is bounded by the deadline (FR-030).
 """
 
 import logging
 import os
-import tarfile
+import time
+
+from _layers import LayerTimeout, safe_extract
 
 logger = logging.getLogger("source_s3")
 
@@ -34,12 +37,13 @@ def _parse_artifact(test_artifact: str) -> tuple:
     return bucket, key
 
 
-def acquire_tests(_test_name: str, dest_path: str) -> None:
+def acquire_tests(_test_name: str, dest_path: str, deadline: float) -> None:
     """Download test archive from S3 and unpack into dest_path.
 
     Args:
         _test_name: Unused — artifact path is taken from TEST_ARTIFACT env var
         dest_path: Container-side path where tests must be placed (/home/pwuser/tests)
+        deadline: Absolute epoch seconds; download and extraction stop there
 
     Environment variables used:
         TEST_ARTIFACT: Artifact path /bucket/key/archive.{tgz,tar.gz}
@@ -49,8 +53,11 @@ def acquire_tests(_test_name: str, dest_path: str) -> None:
 
     Raises:
         RuntimeError: If download or extraction fails
+        LayerTimeout: If the deadline passes
     """
     import boto3
+    from botocore.config import Config
+    from botocore.exceptions import ConnectTimeoutError, ReadTimeoutError
 
     test_artifact = os.environ.get("TEST_ARTIFACT")
     if not test_artifact:
@@ -74,11 +81,15 @@ def acquire_tests(_test_name: str, dest_path: str) -> None:
     except ValueError as exc:
         raise RuntimeError(str(exc)) from exc
 
+    label = f"layer #1 (s3:/{bucket}/{key})"
+    budget = max(1, int(deadline - time.time()))
     s3 = boto3.client(
         "s3",
         aws_access_key_id=aws_access_key_id,
         aws_secret_access_key=aws_secret_access_key,
         endpoint_url=s3_endpoint,
+        config=Config(connect_timeout=budget, read_timeout=budget,
+                      retries={"max_attempts": 2}),
     )
 
     cache_dir = "/home/pwuser/testscripts-cache"
@@ -106,15 +117,14 @@ def acquire_tests(_test_name: str, dest_path: str) -> None:
         try:
             os.makedirs(os.path.dirname(cached_tgz), exist_ok=True)
             s3.download_file(bucket, key, cached_tgz)
+        except (ConnectTimeoutError, ReadTimeoutError) as exc:
+            raise LayerTimeout(f"{label}: download timed out after {budget}s") from exc
         except Exception as exc:
             raise RuntimeError(
                 f"Failed to download s3://{bucket}/{key}: {exc}"
             ) from exc
 
-    try:
-        os.makedirs(dest_path, exist_ok=True)
-        with tarfile.open(cached_tgz, mode="r:gz") as tar:
-            tar.extractall(path=dest_path)
-        logger.debug("extracted %s to %s", cached_tgz, dest_path)
-    except Exception as exc:
-        raise RuntimeError(f"Failed to extract {cached_tgz}: {exc}") from exc
+    if time.time() > deadline:
+        raise LayerTimeout(f"{label}: download timed out after {budget}s")
+    safe_extract(cached_tgz, dest_path, label, deadline)
+    logger.debug("extracted %s to %s", cached_tgz, dest_path)

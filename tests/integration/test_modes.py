@@ -19,7 +19,7 @@ from conftest import _mod as cep, CEP_PLUGIN
 # ---------------------------------------------------------------------------
 # Fixture parameter table
 # (fixture_name, expected_exit, expected_prefix, extra_args, keyword)
-# expected_exit=None means 2-or-3 (tc_syntax)
+# expected_exit=None means 2-or-3 (lenient; no table uses it since spec 023)
 # keyword is checked in output when not None
 # ---------------------------------------------------------------------------
 
@@ -28,7 +28,7 @@ FIXTURES = [
     ("tc_register_pass", 0, "OK -", [], None),
     ("tc_fail", 2, "CRITICAL -", [], None),
     ("tc_timeout", 2, "CRITICAL -", ["--timeout", "15"], "timed out"),
-    ("tc_syntax", None, None, [], None),
+    ("tc_syntax", 2, "CRITICAL -", [], None),
     ("tc_vision_basic", 0, "OK -", [], None),
     ("tc_vision_ambiguous", 0, "OK -", [], None),
     ("tc_vision_color", 0, "OK -", [], None),
@@ -157,7 +157,7 @@ def test_local(
 # suite failure — the signal to re-review fixture promotion.
 FIXTURES_LIGHTPANDA = [
     ("tc_lp_pass", 0, "OK -", [], None),
-    ("tc_syntax", None, None, [], None),
+    ("tc_syntax", 2, "CRITICAL -", [], None),
     ("tc_fail", 2, "CRITICAL -", [], None),
     ("tc_timeout", 2, "CRITICAL -", ["--timeout", "15"], "timed out"),
     pytest.param(
@@ -355,7 +355,7 @@ _CONFIG_DEFAULTS = dict(
     result_dest="local",
     logging="none",
     test_dir=None,
-    test_artifact=None,
+    test_artifacts=(),
     result_dir="/tmp/cep-results",
     testscripts_cache="/tmp/cep-cache",
     report_retention=None,
@@ -393,7 +393,7 @@ def _make_config(**overrides):
     return cep.RunConfig(**base)
 
 
-def _make_ctx(config, omd_root):
+def _make_ctx(config, omd_root, layers=()):
     return cep.RunContext(
         hostname=config.host_name,
         servicedescription=config.service_description,
@@ -406,6 +406,7 @@ def _make_ctx(config, omd_root):
         result_dir=config.result_dir,
         omd_root=omd_root,
         pid_file="/tmp/cep.pid",
+        layers=layers,
         config=config,
     )
 
@@ -428,43 +429,46 @@ def _opencode_config_mount(cmd):
 
 
 def test_authoring_environ_passthrough_and_mount(tmp_path, monkeypatch):
-    """--authoring passes through --environ NAME=VALUE (explicit) and bare
-    NAME (host-forwarded, represented as a None sentinel so podman pulls the
-    value from its own process env — never on the podman command-line args,
-    contracts §5 ps hygiene) into the container, and switches the tests mount
-    to the site-level dir, read-write. Plain --shell and scheduled runs never
-    carry OPENCODE_API_KEY/GEMINI_API_KEY — structurally, since build_env_vars
-    only applies `environ` when ctx.config.authoring (SC-007) — and keep the
-    read-only mount."""
+    """--environ NAME=VALUE (explicit) and bare NAME (host-forwarded) reach the
+    container in every mode (spec 023 FR-001). Like every container variable
+    they are passed to podman as a bare `--env NAME`; the value lives only in
+    build_env_vars(ctx), which becomes the podman process environment, so it
+    never appears on the podman command line (FR-004, D1). --authoring
+    switches the tests mount to the site-level dir, read-write."""
     omd_root = str(tmp_path)
     site = tmp_path / "etc" / "check_cep" / "tests" / "testhost"
     site.mkdir(parents=True)
 
     monkeypatch.setenv("GEMINI_API_KEY", "host-env-key-456")
 
-    # (1) authoring + explicit --environ NAME=VALUE: value injected literally
+    def bare_env_names(cmd):
+        return [cmd[i + 1] for i, tok in enumerate(cmd) if tok == "--env"]
+
+    # (1) authoring + explicit --environ NAME=VALUE: value in the builder,
+    # bare name on the command line
     cfg = _make_config(authoring=True, shell=True,
                         environ=[("OPENCODE_MODEL", "opencode/big-pickle")])
     ctx = _make_ctx(cfg, omd_root)
     env = cep.build_env_vars(ctx)
     cmd = cep.build_podman_command(ctx, "podman", env)
     assert env.get("OPENCODE_MODEL") == "opencode/big-pickle"
-    assert "OPENCODE_MODEL=opencode/big-pickle" in cmd
+    assert "OPENCODE_MODEL" in bare_env_names(cmd)
+    assert not any("opencode/big-pickle" in tok for tok in cmd)
     mount = _tests_mount(cmd)
     assert mount is not None and mount.endswith(":/home/pwuser/tests:rw,z")
     assert str(site) in mount, f"expected site-level mount, got {mount}"
 
-    # (2) authoring + bare --environ NAME: None sentinel, `--env NAME` (no
-    # `=value`) on the podman command — the resolved value never appears there
+    # (2) authoring + bare --environ NAME: the host value is resolved into the
+    # builder; the command line carries only the name
     cfg = _make_config(authoring=True, shell=True,
                         environ=[("GEMINI_API_KEY", None)])
     ctx = _make_ctx(cfg, omd_root)
     env = cep.build_env_vars(ctx)
     cmd = cep.build_podman_command(ctx, "podman", env)
-    assert env.get("GEMINI_API_KEY") is None
-    assert "GEMINI_API_KEY" in cmd
-    assert not any("GEMINI_API_KEY=" in tok for tok in cmd), \
-        "bare form must not put the value on the command line"
+    assert env.get("GEMINI_API_KEY") == "host-env-key-456"
+    assert "GEMINI_API_KEY" in bare_env_names(cmd)
+    assert not any("host-env-key-456" in tok for tok in cmd), \
+        "the value must not appear on the command line"
 
     # (3) authoring + no --environ at all: nothing extra injected (keyless
     # default is the normal path, not a degraded one)
@@ -472,26 +476,32 @@ def test_authoring_environ_passthrough_and_mount(tmp_path, monkeypatch):
     env = cep.build_env_vars(_make_ctx(cfg, omd_root))
     assert "GEMINI_API_KEY" not in env and "OPENCODE_API_KEY" not in env
 
-    # (4) plain --shell (not authoring): --environ entries are structurally
-    # inert — build_env_vars only applies them when ctx.config.authoring
-    cfg = _make_config(shell=True, test_dir=str(tmp_path / "svc"),
-                        environ=[("OPENCODE_API_KEY", "should-not-leak"),
-                                 ("GEMINI_API_KEY", "should-not-leak-either")])
-    ctx = _make_ctx(cfg, omd_root)
-    env = cep.build_env_vars(ctx)
-    cmd = cep.build_podman_command(ctx, "podman", env)
-    assert "OPENCODE_API_KEY" not in env and "GEMINI_API_KEY" not in env
-    assert _tests_mount(cmd).endswith(":/home/pwuser/tests:ro,z")
+    # (4) plain --shell and (5) scheduled run: --environ is active too
+    # (spec 023 FR-001, SC-003 a) — present as bare names, values off argv
+    for extra in ({"shell": True}, {}):
+        cfg = _make_config(test_dir=str(tmp_path / "svc"),
+                            environ=[("OPENCODE_API_KEY", "should-not-leak"),
+                                     ("GEMINI_API_KEY", "should-not-leak-either")],
+                            **extra)
+        ctx = _make_ctx(cfg, omd_root)
+        env = cep.build_env_vars(ctx)
+        cmd = cep.build_podman_command(ctx, "podman", env)
+        assert env["OPENCODE_API_KEY"] == "should-not-leak"
+        assert {"OPENCODE_API_KEY", "GEMINI_API_KEY"} <= set(bare_env_names(cmd))
+        assert not any("should-not-leak" in tok for tok in cmd)
 
-    # (5) scheduled run (no shell/authoring): neither credential var, read-only mount
-    cfg = _make_config(test_dir=str(tmp_path / "svc"),
-                        environ=[("OPENCODE_API_KEY", "should-not-leak"),
-                                 ("GEMINI_API_KEY", "should-not-leak-either")])
-    ctx = _make_ctx(cfg, omd_root)
-    env = cep.build_env_vars(ctx)
-    cmd = cep.build_podman_command(ctx, "podman", env)
-    assert "OPENCODE_API_KEY" not in env and "GEMINI_API_KEY" not in env
-    assert _tests_mount(cmd).endswith(":/home/pwuser/tests:ro,z")
+    # (4)/(5) mounts: the layers are mounted read-only under
+    # /home/pwuser/layers/; /home/pwuser/tests is built inside the container
+    # (spec 023, SC-003 b)
+    svc = tmp_path / "svc"
+    svc.mkdir()
+    for extra in ({"shell": True}, {}):
+        cfg = _make_config(test_dir=str(svc), **extra)
+        layers = tuple(cep.resolve_layers(cfg, omd_root, "testhost", "Portfolio", "0"))
+        ctx = _make_ctx(cfg, omd_root, layers)
+        cmd = cep.build_podman_command(ctx, "podman", cep.build_env_vars(ctx))
+        assert _tests_mount(cmd) is None
+        assert f"{svc}:/home/pwuser/layers/01:ro,z" in cmd
 
 
 def test_opencode_config_overlay_mount_and_env(tmp_path):
@@ -511,7 +521,9 @@ def test_opencode_config_overlay_mount_and_env(tmp_path):
     cmd = cep.build_podman_command(ctx, "podman", env)
 
     assert env.get("OPENCODE_CONFIG") == cep.OPENCODE_CONFIG_CONTAINER_PATH
-    assert f"OPENCODE_CONFIG={cep.OPENCODE_CONFIG_CONTAINER_PATH}" in cmd
+    # Bare name on the command line; the value travels in the podman process
+    # environment (spec 023 D1)
+    assert any(cmd[i] == "--env" and cmd[i + 1] == "OPENCODE_CONFIG" for i in range(len(cmd) - 1))
 
     mount = _opencode_config_mount(cmd)
     assert mount is not None, f"expected overlay mount, cmd={cmd}"
@@ -661,16 +673,19 @@ def test_authoring_environ_invalid_name_exits_3(tmp_path):
     assert code == 3, out
 
 
-def test_environ_outside_authoring_warns_and_ignored(tmp_path):
-    """--environ without --authoring prints a warning; the variable is
-    ignored (never reaches any container — --shell has none to reach here,
-    verified structurally at the unit level above)."""
+def test_environ_outside_authoring_is_active(tmp_path):
+    """--environ without --authoring is active since spec 023 (FR-001, SC-003 a):
+    no warning, the run starts normally (the injection itself is verified in
+    test_environ_injection.py)."""
+    (tmp_path / "omd" / "etc" / "check_cep" / "tests" / "testhost" / "Portfolio").mkdir(parents=True)
     out, code = _run_authoring(
         tmp_path,
-        ["--environ", "OPENCODE_MODEL=opencode/big-pickle"],
+        ["--environ", "OPENCODE_MODEL=opencode/big-pickle",
+         "--result-dir", str(tmp_path / "results")],
         authoring=False,
     )
-    assert "only takes effect with --authoring" in out
+    assert code == 0, out
+    assert "only takes effect with --authoring" not in out
 
 
 def test_opencode_config_outside_authoring_warns_and_ignored(tmp_path):
@@ -678,9 +693,12 @@ def test_opencode_config_outside_authoring_warns_and_ignored(tmp_path):
     fail the run (safe default for templated commands)."""
     overlay = tmp_path / "cep-providers.json"
     overlay.write_text("{}\n")
+    # The service's test directory must exist: since spec 023 a missing one
+    # is UNKNOWN before the container starts.
+    (tmp_path / "omd" / "etc" / "check_cep" / "tests" / "testhost" / "Portfolio").mkdir(parents=True)
     out, code = _run_authoring(
         tmp_path,
-        ["--opencode-config", str(overlay)],
+        ["--opencode-config", str(overlay), "--result-dir", str(tmp_path / "results")],
         authoring=False,
     )
     assert code == 0, out

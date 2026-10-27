@@ -7,7 +7,9 @@ mounts, runs the container, parses results, and produces Nagios-compatible outpu
 """
 
 from argparse import ArgumentParser, ArgumentTypeError
-from dataclasses import dataclass, field
+import base64
+import binascii
+from dataclasses import asdict, dataclass, field
 import io
 import json
 import logging
@@ -22,7 +24,7 @@ import time
 import unicodedata
 import urllib.parse
 from logging.handlers import RotatingFileHandler
-from typing import Any, Dict, List, Optional, Protocol, Tuple
+from typing import Any, Dict, List, NamedTuple, Optional, Protocol, Tuple
 
 logger = logging.getLogger("check_cep")
 
@@ -32,6 +34,12 @@ EXIT_WARNING = 1
 EXIT_CRITICAL = 2
 EXIT_UNKNOWN = 3
 EXIT_AUTH_REQUIRED = 125  # Podman authentication failure
+
+# Exit codes of the container runtime itself (spec 023 FR-052, taken from
+# check_dopla): podman could not create/start the container, so the tests
+# never ran — these go to operations as UNKNOWN, never CRITICAL.
+PODMAN_FAILURE_CODES = (125, 126, 127)
+PODMAN_ERROR_MAX_LEN = 300
 
 # File permissions
 PERM_WORLD_RWX = 0o777
@@ -175,8 +183,52 @@ def format_perfdata(perfdata_list: List[Dict[str, Any]]) -> str:
     return " ".join(parts)
 
 
+# ---------------------------------------------------------------------------
+# Secret masking (spec 023 FR-009, FR-012, R-13): one choke point per channel
+# ---------------------------------------------------------------------------
+
+_MASK_VALUES: List[str] = []
+
+
+def set_mask_values(values: List[str]) -> None:
+    """Replace the mask list: unique, non-empty, longest first."""
+    global _MASK_VALUES
+    _MASK_VALUES = sorted({v for v in values if v}, key=len, reverse=True)
+
+
+def mask_secrets(text: str) -> str:
+    """Replace every occurrence of every mask value with ***."""
+    for value in _MASK_VALUES:
+        text = text.replace(value, "***")
+    return text
+
+
+def mask_values(config: "RunConfig") -> List[str]:
+    """Every secret this run knows: --environ values and plugin credentials."""
+    values = [os.environ.get(name, "") if value is None else value
+              for name, value in config.environ]
+    values += [config.aws_access_key_id, config.aws_secret_access_key,
+               config.loki_password, config.registry_password]
+    values = [v for v in values if v]
+    # Container output is HTML-escaped by sanitize_output() before it is
+    # shown, so mask the escaped form too (a value with quotes or <, >, &).
+    return values + [remove_html_entities(v) for v in values]
+
+
+class MaskingFilter(logging.Filter):
+    """Mask the fully formatted log message, so no handler sees the raw args."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        record.msg = mask_secrets(record.getMessage())
+        record.args = ()
+        return True
+
+
 def nagios_exit(status: str, message: str, perfdata_str: str = "", long_output: str = "") -> int:
     """Print Nagios status line and return exit code.
+
+    Masks secrets in message and long output (spec 023 FR-009); perfdata is
+    never masked.
 
     Args:
         status: One of OK, WARNING, CRITICAL, UNKNOWN
@@ -188,6 +240,8 @@ def nagios_exit(status: str, message: str, perfdata_str: str = "", long_output: 
         Nagios exit code integer
     """
     code_map = {"OK": EXIT_OK, "WARNING": EXIT_WARNING, "CRITICAL": EXIT_CRITICAL, "UNKNOWN": EXIT_UNKNOWN}
+    message = mask_secrets(message)
+    long_output = mask_secrets(long_output)
     line1 = f"{status} - {message}"
     if perfdata_str:
         line1 += f" | {perfdata_str}"
@@ -222,7 +276,7 @@ class RunConfig:
 
     # Paths (templates — not yet expanded)
     test_dir: Optional[str]
-    test_artifact: Optional[str]
+    test_artifacts: Tuple[str, ...]  # repeatable --test-artifact (spec 023)
     result_dir: str
     testscripts_cache: str
 
@@ -243,9 +297,9 @@ class RunConfig:
     vnc: bool
     browser: str
 
-    # AI authoring env passthrough (injected only in authoring mode).
-    # List of (name, value-or-None); None means "forward the host env var's
-    # current value" (bare `--environ NAME` form, keeps secrets out of ps).
+    # --environ, injected in every mode (spec 023 FR-001). List of
+    # (name, value-or-None); None means "forward the host env var's current
+    # value" (bare `--environ NAME` form, keeps secrets out of ps).
     environ: List[Tuple[str, Optional[str]]]
 
     # Host path of an opencode config overlay (providers/models). Authoring
@@ -258,12 +312,12 @@ class RunConfig:
 
     # Registry credentials
     registry_username: Optional[str]
-    registry_password: Optional[str]
+    registry_password: Optional[str] = field(repr=False)
 
     # S3 credentials / config
     s3_endpoint: Optional[str]
-    aws_access_key_id: Optional[str]
-    aws_secret_access_key: Optional[str]
+    aws_access_key_id: Optional[str] = field(repr=False)
+    aws_secret_access_key: Optional[str] = field(repr=False)
     s3_report_bucket: Optional[str]
     s3_report_path: Optional[str]
     s3_report_url: Optional[str]
@@ -271,11 +325,20 @@ class RunConfig:
     # Loki credentials / config
     loki_endpoint: Optional[str]
     loki_user: Optional[str]
-    loki_password: Optional[str]
+    loki_password: Optional[str] = field(repr=False)
     loki_proxy: Optional[str]
 
     # Naemon state
     current_status: Optional[str]
+
+
+@dataclass(frozen=True)
+class Layer:
+    """One --test-artifact (or the implicit/--test-dir default), spec 023 data-model §2."""
+    position: int          # 1-based command-line order
+    host_path: str         # absolute, after %h/%s expansion
+    type: str              # "directory" or "archive"
+    container_path: str    # /home/pwuser/layers/NN or NN.tgz (read-only mount)
 
 
 @dataclass(frozen=True)
@@ -302,6 +365,9 @@ class RunContext:
     result_dir: str
     omd_root: str
     pid_file: str
+
+    # Local test layers in merge order; empty for S3 and --authoring
+    layers: Tuple[Layer, ...]
 
     # All CLI arguments
     config: RunConfig
@@ -332,6 +398,55 @@ def resolve_path_template(template: str, hostname: str,
     if started_str:
         result = result.replace("%t", started_str)
     return result
+
+
+def resolve_layers(config: RunConfig, omd_root: str, hostname: str,
+                   servicedescription: str, started_str: str) -> List[Layer]:
+    """Expand and validate the local test layers (spec 023 FR-025, FR-031).
+
+    Without --test-artifact, the implicit default or --test-dir is the only
+    layer. Raises ValueError with the resolved path (contracts/cli.md §1).
+    """
+    implicit = not config.test_artifacts
+    values = config.test_artifacts or (
+        config.test_dir or omd_root + "/etc/check_cep/tests/%h/%s",)
+    layers = []
+    for position, raw in enumerate(values, 1):
+        path = os.path.abspath(resolve_path_template(
+            raw, hostname, servicedescription, started_str))
+        if os.path.isdir(path):
+            layer_type, suffix = "directory", ""
+        elif os.path.isfile(path) and path.endswith((".tgz", ".tar.gz")):
+            layer_type, suffix = "archive", ".tgz"
+        elif not os.path.exists(path):
+            if implicit:
+                raise ValueError(f"test directory ({path}) does not exist")
+            raise ValueError(f"--test-artifact #{position} ({path}): does not exist")
+        else:
+            where = f"test directory ({path})" if implicit else f"--test-artifact #{position} ({path})"
+            raise ValueError(f"{where}: must be a directory or a .tgz/.tar.gz file")
+        layers.append(Layer(position, path, layer_type,
+                            f"/home/pwuser/layers/{position:02d}{suffix}"))
+    return layers
+
+
+def select_layers(config: RunConfig, omd_root: str, hostname: str,
+                  servicedescription: str, started_str: str) -> Tuple[Layer, ...]:
+    """The layers this run mounts; empty for S3 and --authoring (FR-028/029).
+
+    Raises ValueError for usage errors; warns when --authoring ignores layers.
+    """
+    count = len(config.test_artifacts)
+    if config.test_source == "s3":
+        if count > 1:
+            raise ValueError(f"--test-source s3 supports exactly one --test-artifact (got {count})")
+        return ()
+    if config.authoring:
+        if count > 1:
+            print(f"WARNING: --authoring ignores --test-artifact ({count} given)",
+                  file=sys.stderr, flush=True)
+        return ()
+    return tuple(resolve_layers(config, omd_root, hostname, servicedescription, started_str))
 
 
 def sanitize_container_name(testname: str) -> str:
@@ -554,14 +669,23 @@ def parse_retention(value: str) -> int:
 
 _ENVIRON_NAME_RE = re.compile(r'^[A-Za-z_][A-Za-z0-9_]*$')
 
+# Names check_cep sets itself — the single source for spec 023 FR-006
+# (README lists them; tests/unit/test_docs_reserved_names.py keeps it in sync).
+RESERVED_ENV_NAMES = frozenset({
+    "TEST_SOURCE", "RESULT_DEST", "LOGGING", "PWTIMEOUT", "PROBE_LOCATION",
+    "TESTIDENT", "TERM", "FORCE_COLOR", "CEP_STARTED", "DEBUG", "HEADED",
+    "BROWSER", "REPORT_PATH", "CEP_SLOW_MO", "CEP_VISION_HIGHLIGHT_MS",
+})
+RESERVED_ENV_PREFIXES = ("NAGIOS_", "TEST_ARTIFACT", "S3_", "AWS_", "LOKI_")
+
 
 def parse_environ_arg(raw: str) -> Tuple[str, Optional[str]]:
     """Parse one `--environ NAME[=VALUE]` argument into (name, value-or-None).
 
     A None value means the bare form: forward the host env var's current
-    value at container-start time instead of embedding it here (contracts
-    §5, ps hygiene). Raises ValueError (caller turns this into a usage exit)
-    on a malformed name or an unset host var in bare form.
+    value. Raises ValueError (caller turns this into a usage exit) on a
+    malformed or reserved name (spec 023 FR-006) or an unset host var in
+    bare form.
     """
     if "=" in raw:
         name, value = raw.split("=", 1)
@@ -569,6 +693,8 @@ def parse_environ_arg(raw: str) -> Tuple[str, Optional[str]]:
         name, value = raw, None
     if not _ENVIRON_NAME_RE.match(name):
         raise ValueError(f"--environ: invalid variable name: {name!r}")
+    if name in RESERVED_ENV_NAMES or name.startswith(RESERVED_ENV_PREFIXES):
+        raise ValueError(f"--environ {name}: reserved, check_cep sets this variable itself")
     if value is None and name not in os.environ:
         raise ValueError(
             f"--environ {name}: bare form requires the host environment "
@@ -605,13 +731,15 @@ def run_cleanup(plugin: ReportCleanupPlugin, ctx: RunContext) -> CleanupResult:
 # Container environment variable assembly
 # ---------------------------------------------------------------------------
 
-def build_env_vars(ctx: RunContext) -> Dict[str, Optional[str]]:
-    """Build container environment variable dict from run context.
+def build_env_vars(ctx: RunContext) -> Dict[str, str]:
+    """Build the complete container environment (spec 023, design D1).
 
-    A value of None means "bare passthrough": `--env NAME` (no `=value`) is
-    passed to podman so podman itself forwards the name from its own process
-    environment — the value never appears in the podman command-line args
-    (ps hygiene) for the `--environ NAME` bare form.
+    The single builder: every value is real, and the dict is written in
+    precedence order so later writes win — (1) infrastructure variables incl.
+    plugin credentials (FR-012), (2) `--environ` in every mode (FR-001),
+    (3) the authoring overlay (FR-007), (4) the display variables (FR-048).
+    build_podman_command() passes each name bare (`--env NAME`); the values
+    reach podman only through its process environment (FR-004, R-01).
     """
     env = {
         "TEST_SOURCE": ctx.config.test_source,
@@ -648,8 +776,12 @@ def build_env_vars(ctx: RunContext) -> Dict[str, Optional[str]]:
         env["AWS_ACCESS_KEY_ID"] = ctx.config.aws_access_key_id
     if ctx.config.aws_secret_access_key:
         env["AWS_SECRET_ACCESS_KEY"] = ctx.config.aws_secret_access_key
-    if ctx.config.test_artifact:
-        env["TEST_ARTIFACT"] = ctx.config.test_artifact
+    # S3 reads its single artifact key; local layers travel as JSON
+    # (spec 023, contracts/container-io.md §2).
+    if ctx.config.test_source == "s3" and ctx.config.test_artifacts:
+        env["TEST_ARTIFACT"] = ctx.config.test_artifacts[0]
+    if ctx.layers:
+        env["TEST_ARTIFACT_LAYERS"] = json.dumps([asdict(layer) for layer in ctx.layers])
     if ctx.config.s3_report_bucket:
         env["S3_REPORT_BUCKET"] = ctx.config.s3_report_bucket
     if ctx.config.s3_report_path:
@@ -669,19 +801,70 @@ def build_env_vars(ctx: RunContext) -> Dict[str, Optional[str]]:
     if ctx.config.current_status:
         env["NAGIOS_CURRENT_STATUS"] = ctx.config.current_status
 
-    # AI authoring env passthrough (spec 022, contracts/authoring-backend.md
-    # §5). `--environ` takes effect ONLY in authoring mode; scheduled runs and
-    # plain --shell never carry these. Outside authoring mode a warning was
-    # already emitted in main() — nothing is injected here either way.
-    if ctx.config.authoring:
-        for name, value in ctx.config.environ:
-            env[name] = value
-        # Overlay path wins over a stray `--environ OPENCODE_CONFIG=…` so the
-        # bind-mounted file is what opencode actually reads.
-        if ctx.config.opencode_config:
-            env["OPENCODE_CONFIG"] = OPENCODE_CONFIG_CONTAINER_PATH
+    # --environ in every mode; the last occurrence of a name wins. A bare
+    # name takes the host value (FR-003 guarantees it is set).
+    for name, value in ctx.config.environ:
+        env[name] = os.environ.get(name, "") if value is None else value
 
+    # Overlay path wins over a stray `--environ OPENCODE_CONFIG=…` so the
+    # bind-mounted file is what opencode actually reads.
+    if ctx.config.authoring and ctx.config.opencode_config:
+        env["OPENCODE_CONFIG"] = OPENCODE_CONFIG_CONTAINER_PATH
+
+    # The plugin's display variables win over an --environ of the same name.
+    # With --vnc the container starts its own X server, which a forwarded
+    # DISPLAY/WAYLAND_DISPLAY would suppress (FR-048).
+    if ctx.config.vnc:
+        for name in ("DISPLAY", "WAYLAND_DISPLAY"):
+            env.pop(name, None)
+    env.update(display_forwarding(ctx)[0])
     return env
+
+
+def display_forwarding(ctx: RunContext) -> Tuple[Dict[str, str], List[str]]:
+    """Display env and podman args for --headed/--vnc (spectate mode, FR-048).
+
+    Returns ({} , []) for headless runs. One owner for all display handling:
+    VNC, Wayland, local X11 and SSH-forwarded X11.
+    """
+    if not (ctx.config.headed or ctx.config.vnc):
+        return {}, []
+    env: Dict[str, str] = {}
+    args = [
+        f"--userns=keep-id:uid={CONTAINER_UID},gid={CONTAINER_GID}",
+        "--security-opt", "label=disable",
+        "--ipc=host",
+    ]
+    if ctx.config.vnc:
+        # VNC fallback: container starts Xtigervnc internally and serves
+        # it on port 5900.  The host connects with vncviewer.  Use this
+        # when direct display forwarding fails (e.g. Wayland + SELinux).
+        args.extend(["--publish", "127.0.0.1:5900:5900"])
+    elif detect_display_server() == "wayland":
+        # Wayland: forward the compositor socket so the browser window
+        # appears on-screen via the native Wayland path.
+        wayland_display = os.environ.get("WAYLAND_DISPLAY", "wayland-0")
+        xdg_runtime = os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")
+        wayland_socket = os.path.join(xdg_runtime, wayland_display)
+        args.extend(["--volume", f"{wayland_socket}:{wayland_socket}:ro"])
+        env["WAYLAND_DISPLAY"] = wayland_display
+        env["XDG_RUNTIME_DIR"] = xdg_runtime
+    else:
+        display = os.environ.get("DISPLAY", ":0")
+        xauthority = os.environ.get("XAUTHORITY", os.path.expanduser("~/.Xauthority"))
+        if display.startswith(":"):
+            # Local X11 — forward via Unix socket
+            args.extend(["--volume", "/tmp/.X11-unix:/tmp/.X11-unix:ro"])
+        else:
+            # Remote/SSH-forwarded X11 (e.g. localhost:10.0) — the display is
+            # TCP-based.  Use host networking so the container can reach the
+            # SSH-forwarded port on loopback.
+            args.append("--network=host")
+        env["DISPLAY"] = display
+        if os.path.exists(xauthority):
+            args.extend(["--volume", f"{xauthority}:/tmp/.Xauthority:ro"])
+            env["XAUTHORITY"] = "/tmp/.Xauthority"
+    return env, args
 
 
 # ---------------------------------------------------------------------------
@@ -706,7 +889,7 @@ def authoring_workspace_dir(ctx: RunContext) -> str:
 # ---------------------------------------------------------------------------
 
 def build_podman_command(ctx: RunContext, container_bin: str,
-                         env_vars: Dict[str, Optional[str]]) -> List[str]:
+                         env_vars: Dict[str, str]) -> List[str]:
     """Build complete podman run command."""
     cgroup_parent = ctx.container_name.replace("-", "_") + ".slice"
 
@@ -728,14 +911,17 @@ def build_podman_command(ctx: RunContext, container_bin: str,
         memory_limit += "g"
     cmd.extend(["--memory", memory_limit])
 
-    # Environment variables. A None value is the bare-passthrough form: pass
-    # `--env NAME` so podman pulls the value from its own process environment
-    # instead of the value appearing in these command-line args (ps hygiene).
-    for key, value in env_vars.items():
-        if value is None:
-            cmd.extend(["--env", key])
-        else:
-            cmd.extend(["--env", f"{key}={value}"])
+    # Environment variables: names only (spec 023 R-01). Podman takes each
+    # value from its own process environment (see main()), so no value — no
+    # secret, no credential — ever appears in this argv or the debug log.
+    for key in env_vars:
+        cmd.extend(["--env", key])
+    # FR-011: the container environment has exactly three sources — image
+    # defaults, check_cep's variables above, and --environ. Podman must not
+    # add host proxy variables (default http_proxy=true) or the host env (a
+    # site's env_host=true). A check behind a proxy names it explicitly:
+    # --environ HTTPS_PROXY --environ NO_PROXY (or use.proxy in its config).
+    cmd.extend(["--http-proxy=false", "--env-host=false"])
 
     # Conditional volume mounts
     if ctx.config.authoring:
@@ -749,70 +935,18 @@ def build_podman_command(ctx: RunContext, container_bin: str,
             cmd.extend(["--volume",
                         f"{ctx.config.opencode_config}:"
                         f"{OPENCODE_CONFIG_CONTAINER_PATH}:ro,z"])
-    elif ctx.config.test_source == "local":
-        if ctx.config.test_artifact:
-            local_path = ctx.config.test_artifact
-        else:
-            # Deprecated --test-dir or implicit OMD default
-            raw_dir = ctx.config.test_dir or (ctx.omd_root + "/etc/check_cep/tests/%h/%s")
-            local_path = resolve_path_template(raw_dir, ctx.hostname,
-                                               ctx.servicedescription, ctx.started_str)
-        if local_path.endswith(".tgz") or local_path.endswith(".tar.gz"):
-            cmd.extend(["--volume",
-                        f"{os.path.abspath(local_path)}:/home/pwuser/input-artifact.tgz:ro,z"])
-        else:
-            cmd.extend(["--volume",
-                        f"{os.path.abspath(local_path)}:/home/pwuser/tests:ro,z"])
+    # Every local layer read-only under /home/pwuser/layers/; the container
+    # merges them into its own writable /home/pwuser/tests (spec 023,
+    # contracts/container-io.md §1).
+    for layer in ctx.layers:
+        cmd.extend(["--volume", f"{layer.host_path}:{layer.container_path}:ro,z"])
     cmd.extend(["--volume", f"{os.path.abspath(ctx.result_dir)}:/home/pwuser/results:rw,z"])
     if ctx.config.test_source == "s3":
         cache_dir = ctx.config.testscripts_cache
         cmd.extend(["--volume", f"{os.path.abspath(cache_dir)}:/home/pwuser/testscripts-cache:rw,z"])
 
-    # Headed mode: display forwarding for debug
-    if ctx.config.headed or ctx.config.vnc:
-        cmd.extend([
-            f"--userns=keep-id:uid={CONTAINER_UID},gid={CONTAINER_GID}",
-            "--security-opt", "label=disable",
-            "--ipc=host",
-        ])
-        if ctx.config.vnc:
-            # VNC fallback: container starts Xtigervnc internally and serves
-            # it on port 5900.  The host connects with vncviewer.  Use this
-            # when direct display forwarding fails (e.g. Wayland + SELinux).
-            cmd.extend(["--publish", "127.0.0.1:5900:5900"])
-        elif detect_display_server() == "wayland":
-            # Wayland: forward the compositor socket so the browser window
-            # appears on-screen via the native Wayland path.
-            wayland_display = os.environ.get("WAYLAND_DISPLAY", "wayland-0")
-            xdg_runtime = os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")
-            wayland_socket = os.path.join(xdg_runtime, wayland_display)
-            cmd.extend([
-                "--volume", f"{wayland_socket}:{wayland_socket}:ro",
-                "--env", f"WAYLAND_DISPLAY={wayland_display}",
-                "--env", f"XDG_RUNTIME_DIR={xdg_runtime}",
-            ])
-        else:
-            display = os.environ.get("DISPLAY", ":0")
-            xauthority = os.environ.get("XAUTHORITY", os.path.expanduser("~/.Xauthority"))
-            if display.startswith(":"):
-                # Local X11 — forward via Unix socket
-                cmd.extend([
-                    "--volume", "/tmp/.X11-unix:/tmp/.X11-unix:ro",
-                    "--env", f"DISPLAY={display}",
-                ])
-            else:
-                # Remote/SSH-forwarded X11 (e.g. localhost:10.0) — the
-                # display is TCP-based.  Use host networking so the
-                # container can reach the SSH-forwarded port on loopback.
-                cmd.extend([
-                    "--network=host",
-                    "--env", f"DISPLAY={display}",
-                ])
-            if os.path.exists(xauthority):
-                cmd.extend([
-                    "--volume", f"{xauthority}:/tmp/.Xauthority:ro",
-                    "--env", "XAUTHORITY=/tmp/.Xauthority",
-                ])
+    # Headed mode: display forwarding for spectating (FR-048)
+    cmd.extend(display_forwarding(ctx)[1])
 
     # Authoring mode: map the container user to the host operator so writes to
     # the read-write site workspace are owned correctly (create test folders,
@@ -829,6 +963,11 @@ def build_podman_command(ctx: RunContext, container_bin: str,
         cmd.extend(["--tty", "--interactive", "--entrypoint", "bash"])
 
     cmd.append(ctx.config.image)
+    # A debug shell sees exactly what a check runs (spec 023 FR-032): build
+    # the check root (merged layers) first; a merge error exits 3 without a shell.
+    # Authoring shells work on their rw workspace and are unchanged.
+    if ctx.config.shell and not ctx.config.authoring:
+        cmd.extend(["-c", "python3 /home/pwuser/run.py --prepare-only && exec bash -i"])
     return cmd
 
 
@@ -836,14 +975,19 @@ def build_podman_command(ctx: RunContext, container_bin: str,
 # Container execution
 # ---------------------------------------------------------------------------
 
-def execute_container(cmd: List[str], shell_mode: bool = False) -> Tuple[bytes, bytes, int]:
-    """Execute podman run and return (stdout, stderr, returncode)."""
+def execute_container(cmd: List[str], shell_mode: bool = False,
+                      env: Optional[Dict[str, str]] = None) -> Tuple[bytes, bytes, int]:
+    """Execute podman run and return (stdout, stderr, returncode).
+
+    `env` is the podman process environment that carries the values of the
+    bare `--env NAME` arguments (spec 023 R-01).
+    """
     logger.debug("running command: %s", " ".join(cmd))
     if shell_mode:
-        proc = subprocess.run(cmd)
+        proc = subprocess.run(cmd, env=env)
         return b"", b"", proc.returncode
     else:
-        proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
         return proc.stdout, proc.stderr, proc.returncode
 
 
@@ -854,39 +998,158 @@ def execute_container(cmd: List[str], shell_mode: bool = False) -> Tuple[bytes, 
 # ---------------------------------------------------------------------------
 
 def retry_with_auth(container_bin: str, cmd: List[str], image: str,
-                    username: str, password: str) -> Tuple[bytes, bytes, int]:
-    """Attempt podman login and retry the container command."""
+                    username: str, password: str,
+                    env: Optional[Dict[str, str]] = None) -> Tuple[bytes, bytes, int]:
+    """Attempt podman login and retry the container command.
+
+    A failure returns podman exit code 125 with podman's own message, so it
+    classifies as UNKNOWN (spec 023 FR-052), never as a test failure. The
+    password goes through stdin, never through argv (FR-012).
+    """
     if "/" not in image:
-        return b"", b"", EXIT_CRITICAL
+        return b"", f"Error: cannot log in: image {image} names no registry".encode(), EXIT_AUTH_REQUIRED
 
     registry = image.split("/")[0]
-    login_cmd = [container_bin, "login", "-u", username, "-p", password, registry]
+    login_cmd = [container_bin, "login", "-u", username, "--password-stdin", registry]
     logger.debug("login as %s at registry %s", username, registry)
-    login = subprocess.run(login_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    login = subprocess.run(login_cmd, input=(password or "").encode(),
+                           stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
     if login.returncode == 0:
         logger.debug("re-running command: %s", " ".join(cmd))
-        proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
         return proc.stdout, proc.stderr, proc.returncode
     else:
         logger.debug("login failed")
-        return b"", b"", EXIT_CRITICAL
+        return login.stdout, login.stderr, EXIT_AUTH_REQUIRED
 
 
 # ---------------------------------------------------------------------------
 # Results parsing (steps.json)
 # ---------------------------------------------------------------------------
 
-def parse_steps_json(json_path: str) -> Optional[dict]:
-    """Parse steps.json file. Returns parsed dict or None."""
-    if not os.path.exists(json_path):
-        return None
+# A previous run's report is minutes old; seconds of slack cover coarse mtimes.
+STEPS_JSON_MTIME_SLACK = 2.0
+
+
+def parse_steps_json(json_path: str, not_before: Optional[float] = None) -> Optional[dict]:
+    """Parse steps.json file. Returns parsed dict or None.
+
+    A file older than not_before was left by an earlier run (this run ended
+    before Playwright wrote a report) and is ignored. STEPS_JSON_MTIME_SLACK
+    allows for filesystems with whole-second timestamps.
+    """
     try:
+        if not_before is not None and \
+                os.path.getmtime(json_path) < not_before - STEPS_JSON_MTIME_SLACK:
+            logger.debug(f"Ignoring {json_path}: written by an earlier run")
+            return None
         with open(json_path, "r", encoding="utf-8") as f:
             return json.load(f)
-    except (json.JSONDecodeError, IOError) as e:
+    except FileNotFoundError:
+        return None
+    except (json.JSONDecodeError, OSError) as e:
         logger.warning(f"Could not parse {json_path}: {e}")
         return None
+
+
+def stdio_text(entry: Any) -> str:
+    """Text of one Playwright stdout/stderr entry: `text`, or base64 `buffer`.
+
+    Must stay identical to run.py's copy (spec 023 FR-053); invalid entries
+    and undecodable buffers count as empty.
+    """
+    if not isinstance(entry, dict):
+        return ""
+    if isinstance(entry.get("text"), str):
+        return entry["text"]
+    if isinstance(entry.get("buffer"), str):
+        try:
+            return base64.b64decode(entry["buffer"], validate=True).decode("utf-8", "replace")
+        except (binascii.Error, ValueError):
+            return ""
+    return ""
+
+
+def report_has_visible_stderr(obj: Any) -> bool:
+    """True if any `stderr` list anywhere in the report has visible content.
+
+    Searches the whole report, retries included (spec 023 FR-053). Must stay
+    identical to run.py's copy.
+    """
+    if isinstance(obj, dict):
+        stderr = obj.get("stderr")
+        if isinstance(stderr, list) and any(stdio_text(e).strip() for e in stderr):
+            return True
+        return any(report_has_visible_stderr(v) for v in obj.values())
+    if isinstance(obj, list):
+        return any(report_has_visible_stderr(v) for v in obj)
+    return False
+
+
+def report_has_errors(subjson: dict) -> bool:
+    """True if the report root or a test's first result has `errors` (FR-054).
+
+    Visits the same nodes as extract_output_from_steps: root, suites, specs
+    and `tests[*].results[0]` (retries are not considered).
+    """
+    if subjson.get("errors"):
+        return True
+    for child in subjson.get("suites", []) + subjson.get("specs", []):
+        if report_has_errors(child):
+            return True
+    for test in subjson.get("tests", []):
+        if test.get("results") and report_has_errors(test["results"][0]):
+            return True
+    return False
+
+
+_TEST_SUFFIX_RE = re.compile(r"\.(spec|test)\.(ts|js|mts|cts|mjs|cjs|tsx|jsx)$")
+
+
+def _suite_name(title: str, keep_path: bool) -> str:
+    """One root suite's name (spec 023 FR-051, data-model §7).
+
+    `.test.ts` and `.test.js` keep their legacy forms (stripped / unstripped)
+    so existing perfdata histories stay intact; other spec/test suffixes are
+    stripped. Setup/teardown files (`auth.setup.ts`) keep their suffix, as
+    they always did (FR-051). keep_path uses the relative path with "/" as
+    a word break.
+    """
+    if keep_path:
+        return _TEST_SUFFIX_RE.sub("", title).replace("/", " ")
+    name = os.path.basename(title)
+    if name.endswith(".test.ts"):
+        return name[:-len(".test.ts")]
+    if name.endswith(".test.js"):
+        return name
+    return _TEST_SUFFIX_RE.sub("", name)
+
+
+def root_suite_prefixes(suites: List[dict]) -> List[str]:
+    """Names for several root suites; colliding names fall back to the path."""
+    names = [_suite_name(s["title"], keep_path=False) for s in suites]
+    keys = [camelcase(n) for n in names]
+    return [_suite_name(s["title"], keep_path=True) if keys.count(k) > 1 else n
+            for s, n, k in zip(suites, names, keys)]
+
+
+def ensure_unique_labels(perfdata: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Last-resort guard (SC-007): suffix repeated labels with _2, _3, ..."""
+    taken = {pd["label"] for pd in perfdata}  # never collide with a natural label
+    seen = set()
+    result = []
+    for pd in perfdata:
+        label = pd["label"]
+        if label in seen:
+            n = 2
+            while f"{label}_{n}" in taken:
+                n += 1
+            label = f"{label}_{n}"
+            taken.add(label)
+        seen.add(label)
+        result.append(pd if label == pd["label"] else {**pd, "label": label})
+    return result
 
 
 def extract_perfdata_from_steps(subjson: dict, level: int = 0, prefix: str = "") -> List[Dict[str, Any]]:
@@ -896,9 +1159,11 @@ def extract_perfdata_from_steps(subjson: dict, level: int = 0, prefix: str = "")
     """
     perfdata = []
 
-    for suite in subjson.get("suites", []):
-        if level == 0 and len(subjson["suites"]) > 1:
-            new_prefix = camelcase(os.path.basename(suite["title"]).replace(".test.ts", ""))
+    suites = subjson.get("suites", [])
+    names = root_suite_prefixes(suites) if level == 0 and len(suites) > 1 else []
+    for index, suite in enumerate(suites):
+        if names:
+            new_prefix = camelcase(names[index])
         elif level == 0:
             new_prefix = prefix
         else:
@@ -925,8 +1190,9 @@ def extract_perfdata_from_steps(subjson: dict, level: int = 0, prefix: str = "")
                 m = re.match(r"([\d]+\.*[\d]*)([a-z%]*)", annotation.get("description", ""))
                 if m:
                     suffix = "_cd" if m[2] and m[2].endswith("s") else "_cm"
+                    # Project-qualified, so several projects stay distinct (FR-051)
                     perfdata.append({
-                        "label": prefix + camelcase(annotation["type"].replace("perfdata_", "") + suffix),
+                        "label": new_prefix + camelcase(annotation["type"].replace("perfdata_", "") + suffix),
                         "value": m[1],
                         "unit": m[2],
                     })
@@ -947,9 +1213,11 @@ def extract_output_from_steps(subjson: dict, level: int = 0, prefix: str = "", d
     output = ""
     has_stderr = False
 
-    for suite in subjson.get("suites", []):
-        if level == 0 and len(subjson["suites"]) > 1:
-            new_prefix = os.path.basename(suite["title"]).replace(".test.ts", "")
+    suites = subjson.get("suites", [])
+    names = root_suite_prefixes(suites) if level == 0 and len(suites) > 1 else []
+    for index, suite in enumerate(suites):
+        if names:
+            new_prefix = names[index]
         elif level == 0:
             new_prefix = prefix
         else:
@@ -976,17 +1244,17 @@ def extract_output_from_steps(subjson: dict, level: int = 0, prefix: str = "", d
     for index, stdout_entry in enumerate(subjson.get("stdout", [])):
         if index == 0:
             output += "\n__Stdout " + prefix + "__"
-        text = stdout_entry.get("text", "")
+        text = stdio_text(stdout_entry)
         if text.startswith("NagiosPerfData:"):
             continue
         if text.lstrip().startswith("[CEPDBG]") and not debug:
             continue
         output += "\n" + text.rstrip()
 
-    stderr_lines = []
-    for stderr_entry in subjson.get("stderr", []):
-        text = stderr_entry.get("text", "").rstrip()
-        stderr_lines.append(text)
+    # Only visible entries count (spec 023 FR-053): Playwright's empty
+    # {"buffer": ""} must neither print a section nor cause a WARNING.
+    stderr_lines = [stdio_text(e).rstrip() for e in subjson.get("stderr", [])
+                    if stdio_text(e).strip()]
     if stderr_lines:
         output += "\n__Stderr " + prefix + "__"
         for line in stderr_lines:
@@ -1016,7 +1284,7 @@ def extract_nagios_perfdata_from_stdout(subjson: dict, level: int = 0) -> List[D
             perfdata.extend(extract_nagios_perfdata_from_stdout(test["results"][0], level + 1))
 
     for stdout_entry in subjson.get("stdout", []):
-        text = stdout_entry.get("text", "")
+        text = stdio_text(stdout_entry)
         m = re.match(r"NagiosPerfData:\s*'(.*?)'=([\d]+\.?[\d]*)([a-z%]*)", text)
         if m:
             perfdata.append({"label": m[1], "value": m[2], "unit": m[3]})
@@ -1083,6 +1351,79 @@ def check_timeout(stdout: str, stderr: str) -> bool:
         or re.search(r"Test timeout of \d+ms exceeded", stdout)
         or re.search(r"Timeout \d+ms exceeded", stdout)
     )
+
+
+def extract_cep_unknown(stdout: str) -> Optional[str]:
+    """Return the reason of the first `CEPUNKNOWN [[[msg]]]` marker, or None.
+
+    run.py prints the marker right before it exits 3 (spec 023, R-09).
+    """
+    m = re.search(r"CEPUNKNOWN \[\[\[(.*?)\]\]\]", stdout)
+    return m.group(1) if m else None
+
+
+def strip_cep_unknown(text: str) -> str:
+    """Remove `CEPUNKNOWN [[[msg]]]` marker lines; the status line shows the reason."""
+    return re.sub(r"^CEPUNKNOWN \[\[\[.*?\]\]\][ \t]*(?:\n|$)", "", text, flags=re.M)
+
+
+def extract_podman_error(stderr: str) -> str:
+    """Return podman's first `Error:` line (else the last non-empty line), capped."""
+    lines = [line.strip() for line in stderr.splitlines() if line.strip()]
+    if not lines:
+        return ""
+    error = next((line for line in lines if line.startswith("Error:")), lines[-1])
+    return error[:PODMAN_ERROR_MAX_LEN]
+
+
+class ContainerOutcome(NamedTuple):
+    """Everything classify_result() needs to know about a finished container run."""
+    rc: int
+    oom_killed: bool
+    timed_out: bool
+    duplicate: bool
+    auth_failed: bool
+    cep_unknown: Optional[str]
+    has_stderr_in_steps: bool
+    has_report_errors: bool
+    podman_error: str = ""
+
+
+def classify_result(outcome: ContainerOutcome, service: str, host: str) -> Tuple[str, str]:
+    """Map a container run to (Nagios status, summary) — spec 023 FR-052.
+
+    CRITICAL only when Playwright reported a failure (container exit 2) or a
+    passed report carries `errors` (FR-054). Anything that kept the tests from
+    running properly — OOM kill, podman's own failures, run.py's exit 3,
+    unexpected exit codes — is UNKNOWN. Order: contracts/nagios-output.md §0.
+    """
+    rc = outcome.rc
+    if outcome.oom_killed:
+        return "UNKNOWN", f"test {service} OOM killed"
+    if rc in PODMAN_FAILURE_CODES:
+        error = f": {outcome.podman_error}" if outcome.podman_error else ""
+        if outcome.duplicate:
+            return "UNKNOWN", f"test {service} duplicate, running on host {host}"
+        if rc == EXIT_AUTH_REQUIRED and outcome.auth_failed:
+            return "UNKNOWN", (f"podman failed for test {service} on host {host} "
+                               f"(podman exit code {rc}){error}")
+        return "UNKNOWN", (f"test {service} could not be started on host {host} "
+                           f"(podman exit code {rc}){error}")
+    if rc == EXIT_UNKNOWN:
+        if outcome.cep_unknown:
+            return "UNKNOWN", f"test {service}: {outcome.cep_unknown}"
+        return "UNKNOWN", f"test {service} failed"
+    if rc in (EXIT_OK, EXIT_WARNING):
+        if outcome.has_report_errors:
+            return "CRITICAL", f"test {service} failed"
+        if rc == EXIT_WARNING or outcome.has_stderr_in_steps:
+            return "WARNING", f"test {service} succeeded"
+        return "OK", f"test {service} succeeded"
+    if rc == EXIT_CRITICAL:
+        if outcome.timed_out:
+            return "CRITICAL", f"test {service} timed out"
+        return "CRITICAL", f"test {service} failed"
+    return "UNKNOWN", f"test {service} ended with unexpected exit code {rc} on host {host}"
 
 
 def check_s3_upload_failure(stdout: str, stderr: str) -> bool:
@@ -1393,7 +1734,7 @@ def build_argument_parser() -> ArgumentParser:
 
     # Path arguments
     omd_root = os.environ.get("OMD_ROOT", "")
-    parser.add_argument("--test-artifact", dest="test_artifact", default=None,
+    parser.add_argument("--test-artifact", dest="test_artifacts", action="append", default=[],
                         help="Test script artifact: /bucket/key/tests.tgz (S3) or "
                              "local directory / .tgz file path")
     parser.add_argument("--test-dir", dest="test_dir", default=None,
@@ -1463,17 +1804,16 @@ def build_argument_parser() -> ArgumentParser:
     parser.add_argument("--loki-password", dest="loki_password", default=None)
     parser.add_argument("--loki-proxy", dest="loki_proxy", default=None)
 
-    # AI authoring env passthrough (only takes effect in --authoring mode)
+    # Environment for the test container, every mode (spec 023 FR-001)
     parser.add_argument("--environ", dest="environ", action="append", default=[],
                         metavar="NAME[=VALUE]",
-                        help="Pass an env var into the authoring container "
-                             "(repeatable). NAME=VALUE sets it directly; bare "
-                             "NAME forwards the host env var's current value "
-                             "(keeps secrets out of `ps`). Only takes effect "
-                             "with --authoring (ignored elsewhere, with a "
-                             "warning). Examples: "
-                             "--environ OPENCODE_MODEL=opencode/big-pickle, "
-                             "--environ GEMINI_API_KEY")
+                        help="Pass an environment variable to the test container "
+                             "in every mode (repeatable). Bare NAME forwards the "
+                             "host value (recommended for secrets: keeps the value "
+                             "off every command line); NAME=VALUE sets it directly "
+                             "(visible in check_cep's own `ps` entry). Values are "
+                             "masked as *** in the plugin output. Names check_cep "
+                             "sets itself are rejected.")
     parser.add_argument("--opencode-config", dest="opencode_config", default=None,
                         metavar="FILE",
                         help="Host path to an opencode config overlay (providers/"
@@ -1501,16 +1841,13 @@ def main() -> int:
     if args.authoring:
         args.shell = True
 
-    # Parse --environ NAME[=VALUE] args before any container starts (spec 022,
-    # contracts/authoring-backend.md §5). A malformed name or an unset host
-    # var in bare form is a usage error (exit 3, before any container start).
+    # Parse --environ NAME[=VALUE] args before any container starts (spec 023
+    # FR-001…FR-006). A malformed or reserved name or an unset host var in
+    # bare form is a usage error (exit 3, before any container start).
     try:
         environ = [parse_environ_arg(raw) for raw in args.environ]
     except ValueError as exc:
         return nagios_exit("UNKNOWN", str(exc))
-    if environ and not args.authoring:
-        print("WARNING: --environ only takes effect with --authoring; "
-              "ignored in this mode.", file=sys.stderr, flush=True)
 
     # --opencode-config: resolve and existence-check only in authoring mode.
     # Outside authoring it is inert (warning), matching --environ, so a
@@ -1544,7 +1881,7 @@ def main() -> int:
         result_dest=args.result_dest,
         logging=args.logging,
         test_dir=args.test_dir,
-        test_artifact=args.test_artifact,
+        test_artifacts=tuple(args.test_artifacts),
         result_dir=args.result_dir,
         testscripts_cache=args.testscripts_cache,
         report_retention=args.report_retention,
@@ -1575,6 +1912,9 @@ def main() -> int:
         current_status=args.current_status,
     )
 
+    # Every secret is masked in all output from here on (spec 023 FR-009/012)
+    set_mask_values(mask_values(config))
+
     # ---------------------------------------------------------------------------
     # Logging setup (T032)
     # ---------------------------------------------------------------------------
@@ -1582,6 +1922,8 @@ def main() -> int:
     log_path = omd_root + "/var/log/check_cep.log"
 
     logger.setLevel(logging.DEBUG if config.debug else logging.CRITICAL)
+    if not any(isinstance(f, MaskingFilter) for f in logger.filters):
+        logger.addFilter(MaskingFilter())
     try:
         file_handler = RotatingFileHandler(log_path, maxBytes=LOG_MAX_BYTES, backupCount=LOG_BACKUP_COUNT)
         formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
@@ -1627,7 +1969,7 @@ def main() -> int:
     # ---------------------------------------------------------------------------
     # Test artifact / test-dir validation (017-s3-tgz-source)
     # ---------------------------------------------------------------------------
-    if config.test_dir is not None and config.test_artifact is not None:
+    if config.test_dir is not None and config.test_artifacts:
         return nagios_exit("UNKNOWN",
                            "--test-dir and --test-artifact are mutually exclusive; "
                            "use --test-artifact only")
@@ -1642,16 +1984,22 @@ def main() -> int:
                            "cannot be combined with --test-source s3; omit "
                            "--test-source (or use local) and run against the "
                            "site-level tests directory")
+    # Test layers (spec 023): validated before the PID file and any container
+    try:
+        layers = select_layers(config, omd_root, config.host_name,
+                               config.service_description, started_str)
+    except ValueError as exc:
+        return nagios_exit("UNKNOWN", str(exc))
     if config.test_source == "s3":
-        if not config.test_artifact:
+        if not config.test_artifacts:
             return nagios_exit("UNKNOWN",
                                "--test-artifact is required when --test-source=s3 "
                                "(e.g. --test-artifact=/bucket/path/tests.tgz)")
-        if not (config.test_artifact.endswith(".tgz")
-                or config.test_artifact.endswith(".tar.gz")):
+        if not (config.test_artifacts[0].endswith(".tgz")
+                or config.test_artifacts[0].endswith(".tar.gz")):
             return nagios_exit("UNKNOWN",
                                "--test-artifact must end with .tgz or .tar.gz "
-                               f"(got: {config.test_artifact})")
+                               f"(got: {config.test_artifacts[0]})")
         if not config.s3_endpoint:
             return nagios_exit("UNKNOWN",
                                "--s3-endpoint is required when --test-source=s3")
@@ -1661,14 +2009,6 @@ def main() -> int:
         if not config.aws_secret_access_key:
             return nagios_exit("UNKNOWN",
                                "--aws-secret-access-key is required when --test-source=s3")
-    if config.test_source == "local" and config.test_artifact:
-        if (not os.path.isdir(config.test_artifact)
-                and not config.test_artifact.endswith(".tgz")
-                and not config.test_artifact.endswith(".tar.gz")):
-            return nagios_exit("UNKNOWN",
-                               "--test-artifact with --test-source=local must be a directory "
-                               "or end with .tgz/.tar.gz "
-                               f"(got: {config.test_artifact})")
 
     # ---------------------------------------------------------------------------
     # Build run context (010-run-context)
@@ -1690,6 +2030,7 @@ def main() -> int:
                                          started_str),
         omd_root=omd_root,
         pid_file=os.path.join(omd_root or "/tmp", "var", "tmp", f"check_cep.{_testident}.pid"),
+        layers=layers,
         config=config,
     )
     logger.debug("RunContext: %s", ctx)
@@ -1757,6 +2098,9 @@ def main() -> int:
     # ---------------------------------------------------------------------------
     env_vars = build_env_vars(ctx)
     cmd = build_podman_command(ctx, containerenv.container_bin, env_vars)
+    # Podman forwards only the names listed in cmd, so this broad process
+    # environment never reaches the container as a whole (FR-008).
+    podman_env = {**os.environ, **env_vars}
 
     # Start cgroup poller (T027)
     cgroup_poller = None
@@ -1768,7 +2112,7 @@ def main() -> int:
         print("VNC: connect with:  vncviewer SecurityTypes=None 127.0.0.1::5900",
               file=sys.stderr, flush=True)
     container_start_time = time.time()
-    stdout, stderr, returncode = execute_container(cmd, shell_mode=ctx.config.shell)
+    stdout, stderr, returncode = execute_container(cmd, shell_mode=ctx.config.shell, env=podman_env)
 
     # Stop cgroup poller
     if cgroup_poller:
@@ -1786,24 +2130,29 @@ def main() -> int:
     # ---------------------------------------------------------------------------
     # Auth retry (T018)
     # ---------------------------------------------------------------------------
-    if (returncode == EXIT_AUTH_REQUIRED
-            and b"Authentication is required" in stderr
-            and ctx.config.registry_username):
+    auth_required = (returncode == EXIT_AUTH_REQUIRED
+                     and b"Authentication is required" in stderr)
+    if auth_required and ctx.config.registry_username:
         stdout, stderr, returncode = retry_with_auth(
             containerenv.container_bin, cmd, ctx.config.image,
-            ctx.config.registry_username, ctx.config.registry_password)
-    elif returncode == EXIT_AUTH_REQUIRED:
-        returncode = EXIT_CRITICAL
+            ctx.config.registry_username, ctx.config.registry_password, env=podman_env)
+    # Still 125 after (or without) a login attempt: a registry problem, which
+    # classify_result() reports as UNKNOWN (spec 023 FR-052).
+    auth_failed = auth_required and returncode == EXIT_AUTH_REQUIRED
 
     # ---------------------------------------------------------------------------
     # Sanitize container output (T034)
     # ---------------------------------------------------------------------------
+    # The unmasked strings are for protocol parsing only (markers, timeouts,
+    # podman errors); everything shown to a human uses the masked copies.
     stdout_str = sanitize_output(stdout)
     stderr_str = sanitize_output(stderr)
+    stdout_shown = mask_secrets(stdout_str)
+    stderr_shown = mask_secrets(stderr_str)
 
     # Forward container stderr in debug mode so plugin/source debug logs are visible
-    if ctx.config.debug and stderr_str:
-        print(stderr_str, file=sys.stderr)
+    if ctx.config.debug and stderr_shown:
+        print(stderr_shown, file=sys.stderr)
 
     # ---------------------------------------------------------------------------
     # Parse steps.json (T019)
@@ -1811,18 +2160,21 @@ def main() -> int:
     perfdata = []
     container_output = ""
     has_stderr_in_steps = False
+    has_report_errors = False
 
     steps_json_path = os.path.join(ctx.result_dir, "steps.json")
-    steps_data = parse_steps_json(steps_json_path)
+    steps_data = parse_steps_json(steps_json_path, not_before=ctx.start_time)
 
     if steps_data is not None:
         perfdata.extend(extract_perfdata_from_steps(steps_data))
         perfdata.extend(extract_nagios_perfdata_from_stdout(steps_data))
-        container_output, has_stderr_in_steps = extract_output_from_steps(steps_data, debug=ctx.config.debug)
+        container_output, _ = extract_output_from_steps(steps_data, debug=ctx.config.debug)
+        has_stderr_in_steps = report_has_visible_stderr(steps_data)
+        has_report_errors = report_has_errors(steps_data)
     else:
-        container_output = stdout_str
-        if stderr_str:
-            container_output += "\n" + stderr_str
+        container_output = strip_cep_unknown(stdout_shown)
+        if stderr_shown:
+            container_output += "\n" + stderr_shown
 
     container_output = container_output.strip()
     if not container_output:
@@ -1868,7 +2220,7 @@ def main() -> int:
     # ---------------------------------------------------------------------------
     # Normalize and format perfdata
     # ---------------------------------------------------------------------------
-    perfdata = normalize_perfdata_labels(perfdata)
+    perfdata = ensure_unique_labels(normalize_perfdata_labels(perfdata))
     perfdata_str = format_perfdata(perfdata)
 
     # ---------------------------------------------------------------------------
@@ -1907,26 +2259,20 @@ def main() -> int:
         resolved_url = resolve_report_url(ctx, timestamp)
         annotation = f' <a href="{urllib.parse.quote(resolved_url, safe=":/?&=")}" target="{ctx.config.href_target}">Report</a>'
 
-    # Exit code priority chain (T020, T031)
-    if oom_killed:
-        exit_code = nagios_exit("CRITICAL", f"test {ctx.servicedescription} OOM killed{annotation}",
-                               perfdata_str, container_output)
-    elif timed_out:
-        exit_code = nagios_exit("CRITICAL", f"test {ctx.servicedescription} timed out{annotation}",
-                               perfdata_str, container_output)
-    elif returncode != 0 and not duplicate:
-        exit_code = nagios_exit("CRITICAL", f"test {ctx.servicedescription} failed{annotation}",
-                               perfdata_str, container_output)
-    elif has_stderr_in_steps and returncode == 0:
-        exit_code = nagios_exit("WARNING", f"test {ctx.servicedescription} succeeded{annotation}",
-                               perfdata_str, container_output)
-    elif duplicate:
-        exit_code = nagios_exit("UNKNOWN",
-                               f"test {ctx.servicedescription} duplicate{annotation}, running on host {os.uname()[1]}",
-                               perfdata_str, container_output)
-    else:
-        exit_code = nagios_exit("OK", f"test {ctx.servicedescription} succeeded{annotation}",
-                               perfdata_str, container_output)
+    # Exit-status classification (spec 023 FR-052, contracts/nagios-output.md §0)
+    outcome = ContainerOutcome(
+        rc=returncode,
+        oom_killed=oom_killed,
+        timed_out=timed_out,
+        duplicate=duplicate,
+        auth_failed=auth_failed,
+        cep_unknown=extract_cep_unknown(stdout_str),
+        has_stderr_in_steps=has_stderr_in_steps,
+        has_report_errors=has_report_errors,
+        podman_error=extract_podman_error(stderr_str),
+    )
+    status, summary = classify_result(outcome, ctx.servicedescription, os.uname()[1])
+    exit_code = nagios_exit(status, summary + annotation, perfdata_str, container_output)
 
     # S3 failure appended as warning text (doesn't change exit code)
     if s3_failed:

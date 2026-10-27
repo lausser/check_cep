@@ -1,62 +1,69 @@
-"""source_local.py - Test source plugin: local mount.
+"""source_local.py - Test source plugin: ordered local layers (spec 023).
 
-Two modes depending on TEST_ARTIFACT:
-
-* Directory (already mounted at /home/pwuser/tests by the host):
-  Validates that ~/tests exists and contains test files.
-
-* TGZ archive (mounted at /home/pwuser/input-artifact.tgz by the host):
-  Extracts the archive to ~/tests and then validates test files are present.
+The host bind-mounts every layer read-only under /home/pwuser/layers/ and
+describes them in TEST_ARTIFACT_LAYERS (JSON, contracts/container-io.md §2).
+Archive layers are extracted safely into a staging dir; then all layers are
+merged in order into the writable per-run test tree (dest_path). Whether
+the tree contains tests is decided by run.py per run mode.
 """
 
+import json
+import logging
 import os
-import tarfile
+from typing import List, Optional
 
-from _shared import has_test_files as _has_test_files
+from _layers import LayerError, merge_layers, safe_extract
 
-# Fixed container-side mount point for local tgz artifacts
-_INPUT_ARTIFACT_PATH = "/home/pwuser/input-artifact.tgz"
+logger = logging.getLogger("source_local")
+
+_STAGING_ROOT = "/home/pwuser/.cep-staging"
 
 
-def acquire_tests(_test_name: str, dest_path: str) -> None:
-    """Ensure test files are present at dest_path.
+_LAYER_FIELDS = {"position": int, "host_path": str, "type": str, "container_path": str}
+
+
+def parse_layer_records(raw: Optional[str]) -> List[dict]:
+    """Decode and validate the host's layer list (contracts/container-io.md §2)."""
+    try:
+        layers = json.loads(raw or "")
+    except ValueError:
+        layers = None
+    valid = isinstance(layers, list) and all(
+        isinstance(layer, dict)
+        and all(isinstance(layer.get(k), t) for k, t in _LAYER_FIELDS.items())
+        for layer in layers)
+    if not valid:
+        raise RuntimeError("TEST_ARTIFACT_LAYERS missing or invalid")
+    return layers
+
+
+def acquire_tests(_test_name: str, dest_path: str, deadline: float) -> None:
+    """Merge the layers from TEST_ARTIFACT_LAYERS into dest_path.
 
     Args:
-        _test_name: Unused — artifact type is determined from TEST_ARTIFACT env var
-        dest_path: Container-side path where tests must be (/home/pwuser/tests)
-
-    Environment variables used:
-        TEST_ARTIFACT: Optional.  If set and ends .tgz/.tar.gz, the archive
-                       mounted at /home/pwuser/input-artifact.tgz is extracted
-                       to dest_path.  Otherwise dest_path is expected to be
-                       pre-mounted by the host.
+        _test_name: Unused — the layers are described by TEST_ARTIFACT_LAYERS
+        dest_path: The check root (/home/pwuser/tests)
+        deadline: Absolute epoch seconds; passing it raises LayerTimeout
 
     Raises:
-        RuntimeError: If extraction fails or no test files are found
+        RuntimeError / LayerError: naming `layer #N (<host_path>)`
     """
-    test_artifact = os.environ.get("TEST_ARTIFACT", "")
+    roots = []
+    for layer in parse_layer_records(os.environ.get("TEST_ARTIFACT_LAYERS")):
+        position = layer["position"]
+        label = f"layer #{position} ({layer['host_path']})"
+        container_path = layer["container_path"]
+        if layer["type"] == "archive":
+            if not os.path.isfile(container_path):
+                raise LayerError(f"{label}: archive not found in container")
+            staged = os.path.join(_STAGING_ROOT, f"{position:02d}")
+            safe_extract(container_path, staged, label, deadline)
+            roots.append((position, staged, label))
+        else:
+            if not os.path.isdir(container_path):
+                raise LayerError(f"{label}: directory not found in container")
+            roots.append((position, container_path, label))
 
-    if test_artifact.endswith(".tgz") or test_artifact.endswith(".tar.gz"):
-        # Archive mode: extract from fixed mount point
-        if not os.path.isfile(_INPUT_ARTIFACT_PATH):
-            raise RuntimeError(
-                f"Expected archive at {_INPUT_ARTIFACT_PATH!r} but file not found; "
-                "check that --test-artifact path is correct and the file is readable"
-            )
-        try:
-            os.makedirs(dest_path, exist_ok=True)
-            with tarfile.open(_INPUT_ARTIFACT_PATH, mode="r:gz") as tar:
-                tar.extractall(path=dest_path)
-        except Exception as exc:
-            raise RuntimeError(
-                f"Failed to extract {_INPUT_ARTIFACT_PATH}: {exc}"
-            ) from exc
-    else:
-        # Directory mode: host has already mounted dest_path
-        if not os.path.isdir(dest_path):
-            raise RuntimeError(f"Test directory {dest_path!r} does not exist")
-
-    if not _has_test_files(dest_path):
-        raise RuntimeError(
-            f"No test files (*.test.ts, *.test.js) found in {dest_path!r}"
-        )
+    for override in merge_layers(roots, dest_path, deadline):
+        logger.debug("override: %s layer %d wins over layer %d", override.relpath,
+                     override.winner_position, override.loser_position)

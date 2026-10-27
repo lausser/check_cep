@@ -80,7 +80,19 @@ automatically.
 
 ## 2. Prepare Test Files
 
-Create a directory for your test. The directory needs at minimum:
+A check's tests form an ordinary Playwright project. check_cep runs it in one
+of two *run modes* (details in
+[WRITING-TESTS.md](WRITING-TESTS.md#folder-structure)):
+
+- **Project-root mode** (recommended): a `playwright.config.ts` at the top of
+  the tree. Playwright runs from there with that config and decides which
+  tests run (`testDir`, `testMatch`, `*.spec.ts` and `*.test.ts`, setup
+  projects) — exactly as on a developer machine.
+- **Discovery mode**: no config at the top. check_cep picks the first
+  directory, in byte-wise path order, that contains `*.test.ts`/`*.test.js`
+  and runs Playwright there (the layout used before spec 023).
+
+The example below uses project-root mode. It needs:
 
 - `playwright.config.ts` — Playwright configuration
 - `tests/` subdirectory — containing one or more `*.test.ts` files
@@ -135,8 +147,65 @@ Your test directory should look like this:
     consol.test.ts
 ```
 
-You can have multiple test files, helper modules, and fixture files. Playwright
-discovers all `*.test.ts` / `*.test.js` files under the configured `testDir`.
+Inside the container the same files are
+`/home/pwuser/tests/playwright.config.ts` and
+`/home/pwuser/tests/tests/consol.test.ts`. `/home/pwuser/tests` is the
+*check root* (everything check_cep merged for this check), not a folder of
+tests, so the doubled `tests/tests` is expected.
+
+Because `playwright.config.ts` sits at the top, this is project-root mode:
+Playwright finds all `*.test.ts` / `*.spec.ts` files under the configured
+`testDir`. You can have multiple test files, helper modules, and fixture files.
+
+### Layers
+
+`--test-artifact` is repeatable. Each value is a *layer*: a directory or a
+`.tgz`/`.tar.gz` archive. check_cep merges the layers, in command-line order,
+into one tree, the check root `/home/pwuser/tests` inside the container:
+
+- For the same relative path, the later layer wins; directories merge
+  recursively; dotfiles are included. With `--debug`, every override is
+  logged (`override: playwright.config.ts layer 2 wins over layer 1`).
+- `%h` (host name) and `%s` (service description) are expanded in every
+  value, so one Naemon command can serve every service.
+- The sources are mounted read-only and never modified. The merged tree is a
+  writable copy per run (tests may write into it, e.g.
+  `playwright/.auth/user.json`) and is discarded after the run.
+- The run mode is decided on the merged tree, never on a single layer.
+- Layers are local only. `--test-source s3` takes exactly one
+  `--test-artifact`; `--authoring` ignores them (with a warning for more
+  than one).
+- Without `--test-artifact`, the implicit default
+  `$OMD_ROOT/etc/check_cep/tests/%h/%s` (or the deprecated `--test-dir`) is
+  the only layer.
+- Layers have no roles; only their order matters. Typical arrangements:
+  - *enterprise → project → service*: a shared layer with
+    `playwright.config.ts`, `tsconfig.json` and helpers; a project layer;
+    the service's tests.
+  - *final override layer*: a last, probe-specific layer that replaces one
+    file, e.g. a `playwright.config.ts` with this probe location's proxy.
+  - *single layer*: one directory or archive, as before.
+- `package.json` and `node_modules` in a layer are ignored; only the packages
+  in the image are available.
+
+A misconfigured layer gives UNKNOWN before or instead of a test run: a
+missing path or an unsupported type (`--test-artifact #2 (<path>): does not
+exist`), a corrupt or unsafe archive, a symbolic link pointing outside the
+tree, a file in one layer where another has a directory (`type conflict at
+functions`), or a merged tree without tests.
+
+Example Naemon command with a shared layer and one per service:
+
+```cfg
+define command {
+  command_name  check_cep_layered
+  command_line  $USER1$/check_cep --host-name '$HOSTNAME$' --service-description '$SERVICEDESC$' \
+                --image check_cep:latest --probe-location $_HOSTPROBE$ \
+                --test-artifact $USER5$/check_cep/layers/enterprise \
+                --test-artifact $USER5$/check_cep/tests/%h/%s \
+                --environ APP_PASSWORD
+}
+```
 
 ### Don't want to write the test yourself?
 
@@ -177,7 +246,8 @@ python3 src/check_cep \
 
 1. `check_cep` creates the result directory (`/tmp/my-first-results`)
 2. It starts a Podman container with:
-   - your test directory mounted read-only at `/home/pwuser/tests`
+   - your test directory mounted read-only as a layer, which `run.py` copies
+     into the writable check root `/home/pwuser/tests` before each run
    - the result directory mounted read-write at `/home/pwuser/results`
 3. Inside the container, `run.py` runs `npx playwright test`
 4. Playwright writes `steps.json`, an HTML report, and (on failure) screenshots
@@ -245,11 +315,15 @@ cat /tmp/my-first-results/test-meta.json
     "exitcode": 0,
     "duration": "6.513",
     "probe_location": "local",
-    "status": "OK"
+    "status": "OK",
+    "layers": [
+        {"position": 1, "path": "/tmp/my-first-test", "type": "directory"}
+    ]
 }
 ```
 
-Both `started` and `finished` are Unix epoch integer strings. `started` reflects
+`layers` lists the test layers in merge order with their host paths (for S3:
+`s3:/<bucket>/<key>`). Both `started` and `finished` are Unix epoch integer strings. `started` reflects
 the host-side `check_cep` process start time; `finished` is when the container
 wrote the file. The directory name matches `started` when `%t` is used.
 
@@ -321,6 +395,104 @@ After a successful run, result files are owned normally:
 This requires `pwuser` to have passwordless `sudo`, which the Dockerfile
 configures via `/etc/sudoers.d/pwuser`.
 
+## 6. Secrets and `--environ`
+
+Tests read secrets from `process.env`. `--environ` passes a variable into the
+test container in **every** mode — scheduled checks, `--shell`, `--headed`,
+`--vnc` and `--authoring` (repeatable):
+
+| Form | Effect |
+|---|---|
+| `--environ APP_PASSWORD` (bare) | forwards the value check_cep itself has in its environment; unset → UNKNOWN before the container starts |
+| `--environ APP_PASSWORD=s3cret` (explicit) | sets the value byte-for-byte (spaces, quotes, `=`, newlines) |
+| `--environ APP_PASSWORD=` | sets the empty string (not masked) |
+
+The last occurrence of a name wins. Only named variables reach the container;
+nothing from the host environment is forwarded implicitly.
+
+**Recommendation**: put the secret into the environment of check_cep (e.g. a
+Naemon environment macro) and use the bare form — then the value never
+appears on any command line.
+
+### Secret exposure model
+
+| Where a value can be seen | Bare `--environ NAME` | Explicit `--environ NAME=VALUE` |
+|---|---|---|
+| check_cep's own command line (`ps`, visible to **all** local users) | not visible | **visible** — unavoidable, documented |
+| Container runtime command line (`ps`, all users) | not visible | not visible (FR-004) |
+| Plugin debug log (`--debug`) | not visible | not visible (FR-004) |
+| Process/container environment (`/proc/<pid>/environ`, `podman inspect`; same user or root only) | visible | visible |
+| Nagios status line and long output (GUI, notifications, history) | masked (FR-009) | masked (FR-009) |
+| Playwright reports, traces, screenshots, videos | test author's responsibility | test author's responsibility |
+
+The plugin's own credentials (`--aws-access-key-id`,
+`--aws-secret-access-key`, `--loki-password`, `--registry-password`) follow
+the explicit-form column: they are passed to podman by name only (the
+registry login reads the password from stdin), never logged, and masked in
+the output.
+
+### Output masking
+
+Every non-empty `--environ` value and plugin credential is replaced by `***`
+in the Nagios status line and long output (including container output
+forwarded with `--debug`). Perfdata and the files in the results directory
+are not masked. Masking replaces *every* occurrence, so a short or common
+value (`1`, `admin`, `true`) also masks unrelated text — use distinctive
+values. Values typed into pages or printed by tests can still appear in
+traces, screenshots, videos and HTML reports, which masking does not cover.
+
+### Reserved names
+
+check_cep sets these variables itself; `--environ` rejects them with UNKNOWN
+(`--environ NAME: reserved, check_cep sets this variable itself`):
+
+- exact names: `TEST_SOURCE`, `RESULT_DEST`, `LOGGING`, `PWTIMEOUT`,
+  `PROBE_LOCATION`, `TESTIDENT`, `TERM`, `FORCE_COLOR`, `CEP_STARTED`,
+  `DEBUG`, `HEADED`, `BROWSER`, `REPORT_PATH`, `CEP_SLOW_MO`,
+  `CEP_VISION_HIGHLIGHT_MS`
+- prefixes: `NAGIOS_`, `TEST_ARTIFACT`, `S3_`, `AWS_`, `LOKI_`
+
+The display variables (`DISPLAY`, `WAYLAND_DISPLAY`, `XDG_RUNTIME_DIR`,
+`XAUTHORITY`) are not reserved, but in `--headed`/`--vnc` mode the plugin's
+own values win. `OPENCODE_CONFIG` is allowed; with `--authoring
+--opencode-config` the overlay path wins.
+
+### Container environment
+
+The container environment has exactly three sources: the image defaults
+(plus `container`, `HOSTNAME` and `HOME`, which podman always sets), the
+variables check_cep sets itself, and the `--environ` names. Every
+`podman run` gets `--http-proxy=false --env-host=false`, so podman no longer
+forwards host proxy variables (`http_proxy`, `https_proxy`, `ftp_proxy`,
+`no_proxy`, either case) or a site's `env_host = true` environment.
+
+A check behind a proxy names it explicitly:
+
+1. **Traffic to the application under test** (the browser and Playwright's
+   `request` fixture): set `use.proxy` in `playwright.config.ts`, preferably
+   in a shared layer or a probe-specific final override layer. `bypass`
+   replaces `NO_PROXY`; credentials come from `--environ`:
+
+   ```ts
+   use: {
+     proxy: {
+       server: 'http://proxy.corp:3128',
+       bypass: 'localhost,.corp',
+       username: process.env.PROXY_USER,
+       password: process.env.PROXY_PASSWORD,
+     },
+   },
+   ```
+
+   This covers the browser and the `request` fixture, not plain Node
+   `fetch()` in test code. Whether `use.proxy` reaches `--browser lightpanda`
+   is unverified.
+2. **Everything outside Playwright** — the S3 source/destination (boto3) and
+   your own `fetch()`/`http` calls: `--environ HTTPS_PROXY --environ NO_PROXY`
+   (and `HTTP_PROXY` if needed). Node ignores proxy variables by default, so
+   own `fetch` calls need explicit proxy handling in the test code. Loki keeps
+   its dedicated `--loki-proxy`.
+
 ## 7. Debug a Failing Test
 
 ### Add `--debug` for Verbose Logging
@@ -357,8 +529,11 @@ python3 src/check_cep \
   --shell
 ```
 
-This drops you into a bash shell inside the container. From there you can run
-Playwright manually:
+Before the prompt appears, check_cep builds the check root exactly as a
+check run does (all layers merged, archives extracted) and prints
+`check root ready: /home/pwuser/tests (<run mode>)`. A merge error
+prints its reason and exits 3 without opening a shell. From the shell you can
+run Playwright manually:
 
 ```bash
 cd ~/tests
@@ -766,7 +941,9 @@ and writes results to `$OMD_ROOT/var/tmp/check_cep/webserver01/E2E_Login_Check/`
 | `--test-source` | `local` | `local` or `s3` |
 | `--result-dest` | `local` | `local` or `s3` |
 | `--logging` | `none` | `none` or `loki` |
-| `--test-dir` | `$OMD_ROOT/etc/check_cep/tests/%h/%s` | Host-side test directory |
+| `--test-artifact` | `$OMD_ROOT/etc/check_cep/tests/%h/%s` | Test layer: directory or `.tgz`/`.tar.gz` (local), `/bucket/key.tgz` (S3). Repeatable for local sources; merged in order, later wins. Supports `%h`/`%s`. See [Layers](#layers) |
+| `--test-dir` | — | Deprecated single test directory (supports `%h`/`%s`); mutually exclusive with `--test-artifact` |
+| `--environ NAME[=VALUE]` | — | Pass an environment variable to the test container in every mode (repeatable). Values are masked as `***` in the output. See [Secrets](#6-secrets-and---environ) |
 | `--result-dir` | `$OMD_ROOT/var/tmp/check_cep/%h/%s` | Host-side result directory. Supports `%h` (hostname), `%s` (service), `%t` (Unix epoch of process start — creates a new directory per run) |
 | `--report-retention` | off | Delete run directories older than this duration after each run (e.g. `24h`, `168h`). Requires `%t` in `--result-dir`. |
 | `--timeout` | `60` | Container timeout in seconds |

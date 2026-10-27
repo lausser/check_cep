@@ -6,6 +6,126 @@ available in the next container image build.
 
 ---
 
+## Spec 023 — Layered Test Artifacts, Playwright Project Layout and Secret Injection
+
+**Branch**: `023-layered-artifacts-secrets`
+
+### Summary
+
+Three capabilities and one policy fix. (1) **Secrets**: `--environ
+NAME[=VALUE]` works in every mode; values reach the container without
+appearing on any podman command line or in `--debug` output and are masked
+as `***` in the Nagios output; plugin credentials get the same treatment.
+(2) **Layers**: `--test-artifact` is repeatable; local directories and
+`.tgz` archives are mounted read-only and merged in order into a writable
+per-run test tree. (3) **Run modes**: a Playwright config at the top of the
+merged tree runs the project as-is (project-root mode, incl. `*.spec.ts`,
+setup projects, `tsconfig` aliases); otherwise the previous discovery
+applies. (4) **Exit-status classification**: CRITICAL now means only "the
+Playwright tests reported a failure"; infrastructure problems are UNKNOWN.
+
+### Deliberately changed behavior
+
+Review these before upgrading:
+
+1. `--environ` is active in all modes (scheduled, `--shell`, `--headed`,
+   `--vnc`, `--authoring`); the "only takes effect with --authoring" warning
+   is gone.
+2. `--environ` values and plugin credentials are masked as `***` in the
+   status line and long output (every occurrence — use distinctive values).
+3. Reserved names (`TEST_SOURCE`, `PWTIMEOUT`, `CEP_SLOW_MO`, `NAGIOS_*`,
+   `AWS_*`, … — see README) are rejected with UNKNOWN.
+4. **Breaking**: host proxy variables (`http_proxy`, `https_proxy`,
+   `ftp_proxy`, `no_proxy`, either case) are no longer forwarded implicitly;
+   every `podman run` gets `--http-proxy=false --env-host=false`. Migration:
+   - application under test (browser, `request` fixture): `use.proxy` in
+     `playwright.config.ts`, ideally in a shared or probe-specific layer;
+   - S3 and own `fetch` calls: `--environ HTTPS_PROXY --environ NO_PROXY`.
+   See README → *Container environment*.
+5. `/home/pwuser/tests` is a writable per-run copy built inside the
+   container; sources are mounted read-only under `/home/pwuser/layers/`.
+   The `/home/pwuser/input-artifact.tgz` mount is gone.
+6. Discovery picks the byte-wise first directory with test files and warns
+   (stderr) about the others; previously the first one found by `os.walk`.
+7. Project-root mode: a tree with a top-level Playwright config whose tests
+   previously ran from a subdirectory now runs from the top with that config.
+8. `--shell` (without `--authoring`) shows the merged tree, including
+   extracted `.tgz` layers; a merge error exits 3 without a shell.
+9. Acquisition (extraction, merge, S3 download) counts toward `--timeout`;
+   Playwright gets the remainder.
+10. Acquisition, merge and "no tests" failures are UNKNOWN (previously
+    CRITICAL "failed"); a missing local test directory is UNKNOWN before the
+    container starts (previously a podman mount error → CRITICAL).
+11. **Exit-status classification**: OOM kills, podman failures (exit
+    125/126/127, including registry authentication), container exit 3 and
+    unexpected exit codes are UNKNOWN instead of CRITICAL. CRITICAL is
+    reported only when Playwright reported a failure or timed out — check
+    your notification routing for UNKNOWN.
+12. A passed run whose report contains Playwright `errors` entries (report
+    root or a test's first result) is CRITICAL.
+13. A test can signal WARNING by writing visible text to stderr or by
+    exiting 150; Playwright's empty stderr chunks no longer cause a false
+    WARNING, and base64 `buffer` stdout/stderr chunks are decoded instead of
+    dropped.
+
+### Added
+
+- `src/container/image/plugins/_layers.py`: safe archive extraction
+  (`tarfile` "data" filter, member by member, deadline-aware, absolute
+  member names rejected) and a two-phase merge (validate everything, then
+  copy): type conflicts, special files and escaping symlinks are errors
+  naming `layer #N (<host path>)`.
+- `src/check_cep`: `Layer`, `resolve_layers()`/`select_layers()` (`%h`/`%s`
+  expansion, validation before any container starts), `RESERVED_ENV_*`,
+  `display_forwarding()`, masking (`set_mask_values`, `mask_secrets`,
+  `MaskingFilter`), `ContainerOutcome` + `classify_result()`,
+  `ensure_unique_labels()`.
+- `src/container/image/run.py`: `prepare()` → `RunMode` (project-root /
+  discovery), `--prepare-only`, the `CEPUNKNOWN [[[reason]]]` marker,
+  `normalize_exit()`, crash boundary `run_guarded()`, spectate wrapper next
+  to the active config, `layers` in `test-meta.json`.
+
+### Migration notes
+
+- Scripts that inspected `/home/pwuser/input-artifact.tgz` or expected
+  `/home/pwuser/tests` to be the read-only source mount must use the merged
+  tree instead.
+- WRITING-TESTS renames "Pattern A/B" to "Nested layout"/"Flat layout"
+  (discovery mode) and adds project-root mode.
+
+### Verification status
+
+- Unit tests: 289 passed (58 before this spec): every `classify_result()`
+  branch plus a property test over all exit codes, the merge/extract helper,
+  reserved names, bare-argv invariant, masking, run modes, label rules.
+- `make test-all` (local + S3/MinIO + Loki): 119 passed, 12 skipped,
+  1 xfailed, 1 failed. The failure, `test_local_lightpanda[tc_lp_pass]`
+  (Lightpanda finds no `h1` on https://example.com), fails identically on
+  the pre-spec baseline and is unrelated.
+- Verified end to end: secrets reach the test in every form and never appear
+  in the podman argv (also sampled with `ps` during a run), `--debug` or the
+  Nagios output; the container environment equals image `ENV` + podman's own
+  variables + check_cep's + `--environ` names (no proxies, no unnamed host
+  variables); single-layer parity with the pre-spec release (status line,
+  exit code, perfdata labels); layered nested and project-root checks equal
+  their hand-merged single directory; setup projects with `storageState`;
+  slowMo takes effect headless and via VNC in both run modes; `--shell`
+  builds the merged tree.
+- SC-008: 50 MB single layer, median of 5 runs: 2.97 s before, 3.01 s after
+  (+0.04 s).
+- Code review with a second agent (OpenCode/GPT-5.6): fixed duplicate-label
+  suffix collisions, a missing deadline check while planning the merge, and
+  validation of the layer handoff; kept `extractall()`-compatible reverse
+  directory order and the integer acquisition-time deduction.
+- Verified by hand on the desktop (Wayland and VNC): spectate with visible
+  slowMo and vision highlights, and an interactive `--shell` on a merged
+  directory + `.tgz` tree.
+- Walkthrough fixes: an UNKNOWN that ends the run before Playwright no longer
+  reports the previous run's perfdata and output (a `steps.json` older than
+  the run is ignored) or the raw `CEPUNKNOWN` marker as long output.
+
+---
+
 ## Spec 022 — OpenCode CLI as Default AI Authoring Backend
 
 **Branch**: `022-opencode-authoring`

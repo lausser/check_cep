@@ -2,17 +2,21 @@
 (017-s3-tgz-source: T010, T015, T016, T017)."""
 
 import io
+import json
 import os
 import tarfile
 import tempfile
+import time
 from unittest.mock import MagicMock, patch, call
 
 import pytest
 
 # Container-side plugins are importable because tests/unit/conftest.py adds
 # src/container/image/plugins/ to sys.path before test collection.
+import _layers
 import source_s3
 import source_local
+from _layers import LayerError, LayerTimeout
 
 
 # ---------------------------------------------------------------------------
@@ -69,7 +73,7 @@ class TestParseArtifact:
 def test_s3_acquire_tests_missing_env_raises(monkeypatch):
     monkeypatch.delenv("TEST_ARTIFACT", raising=False)
     with pytest.raises(RuntimeError, match="TEST_ARTIFACT"):
-        source_s3.acquire_tests("ignored", "/dest")
+        source_s3.acquire_tests("ignored", "/dest", time.time() + 60)
 
 
 # ---------------------------------------------------------------------------
@@ -175,7 +179,7 @@ def test_s3_cache_miss_triggers_download(monkeypatch, tmp_path):
 
     with patch("boto3.client", return_value=mock_s3):
         with patch("source_s3.os.path.join", side_effect=patched_join):
-            source_s3.acquire_tests("ignored", str(dest))
+            source_s3.acquire_tests("ignored", str(dest), time.time() + 60)
 
     mock_s3.download_file.assert_called_once_with("mybucket", "checks/login.tgz",
                                                    str(expected_cached))
@@ -224,7 +228,7 @@ def test_s3_cache_stale_triggers_redownload(monkeypatch, tmp_path):
     dest = tmp_path / "tests"
     with patch("boto3.client", return_value=mock_s3):
         with patch("source_s3.os.path.join", side_effect=patched_join):
-            source_s3.acquire_tests("ignored", str(dest))
+            source_s3.acquire_tests("ignored", str(dest), time.time() + 60)
 
     mock_s3.download_file.assert_called_once()
 
@@ -242,73 +246,133 @@ def test_s3_multi_segment_key_cache_path():
 
 
 # ---------------------------------------------------------------------------
-# source_local.acquire_tests: directory mode (T015)
+# source_local.acquire_tests: ordered layers from TEST_ARTIFACT_LAYERS (spec 023)
 # ---------------------------------------------------------------------------
 
-def test_local_directory_mode_validates_tests(tmp_path):
-    # Populate with a test file
-    (tmp_path / "login.test.ts").write_text("// test")
-
-    source_local.acquire_tests("ignored", str(tmp_path))  # Should not raise
-
-
-def test_local_directory_mode_missing_dir_raises(tmp_path):
-    missing = tmp_path / "does_not_exist"
-    with pytest.raises(RuntimeError, match="does not exist"):
-        source_local.acquire_tests("ignored", str(missing))
+def _layer_env(monkeypatch, layers):
+    monkeypatch.setenv("TEST_ARTIFACT_LAYERS", json.dumps([
+        {"position": i + 1, "host_path": f"/host/{i + 1}", "type": kind, "container_path": str(path)}
+        for i, (kind, path) in enumerate(layers)]))
 
 
-def test_local_directory_mode_no_test_files_raises(tmp_path):
-    (tmp_path / "readme.md").write_text("docs")
-    with pytest.raises(RuntimeError, match="No test files"):
-        source_local.acquire_tests("ignored", str(tmp_path))
+@pytest.fixture
+def staging(tmp_path, monkeypatch):
+    monkeypatch.setattr(source_local, "_STAGING_ROOT", str(tmp_path / "staging"))
 
 
-# ---------------------------------------------------------------------------
-# source_local.acquire_tests: tgz mode (T015)
-# ---------------------------------------------------------------------------
-
-def test_local_tgz_mode_extracts_and_validates(tmp_path, monkeypatch):
-    # Build a tgz with a test file
-    tgz_path = tmp_path / "bundle.tgz"
-    _make_tgz(str(tgz_path), {"suite.test.ts": "// test"})
-
+def test_local_dir_and_tgz_merge(tmp_path, monkeypatch, staging):
+    shared = tmp_path / "shared"
+    (shared / "functions").mkdir(parents=True)
+    (shared / "functions" / "shared.ts").write_text("export const x = 1;")
+    tgz = tmp_path / "svc.tgz"
+    _make_tgz(str(tgz), {"login.test.ts": "// test"})
+    _layer_env(monkeypatch, [("directory", shared), ("archive", tgz)])
     dest = tmp_path / "tests"
-    monkeypatch.setenv("TEST_ARTIFACT", "/somewhere/bundle.tgz")
-
-    with patch("source_local._INPUT_ARTIFACT_PATH", str(tgz_path)):
-        source_local.acquire_tests("ignored", str(dest))
-
-    assert (dest / "suite.test.ts").exists()
-
-
-def test_local_tgz_mode_missing_archive_raises(tmp_path, monkeypatch):
-    dest = tmp_path / "tests"
-    monkeypatch.setenv("TEST_ARTIFACT", "/somewhere/bundle.tgz")
-
-    with patch("source_local._INPUT_ARTIFACT_PATH", str(tmp_path / "nonexistent.tgz")):
-        with pytest.raises(RuntimeError, match="Expected archive"):
-            source_local.acquire_tests("ignored", str(dest))
-
-
-def test_local_tgz_mode_no_test_files_raises(tmp_path, monkeypatch):
-    tgz_path = tmp_path / "empty.tgz"
-    _make_tgz(str(tgz_path), {"README.md": "docs"})
-    dest = tmp_path / "tests"
-    monkeypatch.setenv("TEST_ARTIFACT", "/somewhere/empty.tgz")
-
-    with patch("source_local._INPUT_ARTIFACT_PATH", str(tgz_path)):
-        with pytest.raises(RuntimeError, match="No test files"):
-            source_local.acquire_tests("ignored", str(dest))
-
-
-def test_local_tar_gz_extension_also_triggers_extraction(tmp_path, monkeypatch):
-    tgz_path = tmp_path / "bundle.tar.gz"
-    _make_tgz(str(tgz_path), {"login.test.ts": "// test"})
-    dest = tmp_path / "tests"
-    monkeypatch.setenv("TEST_ARTIFACT", "/somewhere/bundle.tar.gz")
-
-    with patch("source_local._INPUT_ARTIFACT_PATH", str(tgz_path)):
-        source_local.acquire_tests("ignored", str(dest))
-
+    source_local.acquire_tests("ignored", str(dest), time.time() + 60)
+    assert (dest / "functions" / "shared.ts").exists()
     assert (dest / "login.test.ts").exists()
+
+
+def test_local_missing_layer_names_position(tmp_path, monkeypatch, staging):
+    _layer_env(monkeypatch, [("directory", tmp_path / "nope")])
+    with pytest.raises(RuntimeError, match=r"layer #1 \(/host/1\)"):
+        source_local.acquire_tests("ignored", str(tmp_path / "tests"), time.time() + 60)
+
+
+def test_local_missing_archive_names_position(tmp_path, monkeypatch, staging):
+    _layer_env(monkeypatch, [("archive", tmp_path / "nope.tgz")])
+    with pytest.raises(RuntimeError, match=r"layer #1 \(/host/1\): archive not found"):
+        source_local.acquire_tests("ignored", str(tmp_path / "tests"), time.time() + 60)
+
+
+def test_local_no_tests_is_not_the_plugins_concern(tmp_path, monkeypatch, staging):
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    (docs / "readme.md").write_text("docs")
+    _layer_env(monkeypatch, [("directory", docs)])
+    source_local.acquire_tests("ignored", str(tmp_path / "tests"), time.time() + 60)
+
+
+def test_local_missing_env(monkeypatch, tmp_path):
+    monkeypatch.delenv("TEST_ARTIFACT_LAYERS", raising=False)
+    with pytest.raises(RuntimeError, match="TEST_ARTIFACT_LAYERS missing or invalid"):
+        source_local.acquire_tests("ignored", str(tmp_path), time.time() + 60)
+
+
+def test_local_past_deadline(tmp_path, monkeypatch, staging):
+    d = tmp_path / "d"
+    d.mkdir()
+    (d / "a.test.ts").write_text("x")
+    _layer_env(monkeypatch, [("directory", d)])
+    with pytest.raises(LayerTimeout):
+        source_local.acquire_tests("x", str(tmp_path / "tests"), time.time() - 1)
+
+
+def test_local_deadline_passes_during_archive(tmp_path, monkeypatch, staging):
+    tgz = tmp_path / "a.tgz"
+    _make_tgz(str(tgz), {"a.test.ts": "1", "b.txt": "2"})
+    _layer_env(monkeypatch, [("archive", tgz)])
+    calls = []
+
+    def fake_clock():  # before the first member: in time; afterwards: late
+        calls.append(1)
+        return 100.0 if len(calls) == 1 else 200.0
+    monkeypatch.setattr(_layers.time, "time", fake_clock)
+    merged = []
+    monkeypatch.setattr(source_local, "merge_layers", lambda *a: merged.append(a))
+    with pytest.raises(LayerTimeout):
+        source_local.acquire_tests("x", str(tmp_path / "tests"), 150.0)
+    assert merged == []
+
+
+# ---------------------------------------------------------------------------
+# source_s3: extraction is safe, downloads are bounded (spec 023 FR-024/FR-030)
+# ---------------------------------------------------------------------------
+
+def _s3_env(monkeypatch):
+    monkeypatch.setenv("TEST_ARTIFACT", "/mybucket/checks/login.tgz")
+    monkeypatch.setenv("S3_ENDPOINT", "https://s3.example.com")
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "key")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "secret")
+
+
+def _redirect_cache(cache_dir):
+    original_join = os.path.join
+
+    def patched_join(*args):
+        if args and args[0] == "/home/pwuser/testscripts-cache":
+            return original_join(str(cache_dir), *args[1:])
+        return original_join(*args)
+    return patch("source_s3.os.path.join", side_effect=patched_join)
+
+
+def test_s3_extraction_is_safe(monkeypatch, tmp_path):
+    _s3_env(monkeypatch)
+
+    def fake_download(bucket, key, local_path):
+        os.makedirs(os.path.dirname(local_path), exist_ok=True)
+        _make_tgz(local_path, {"../evil": "x"})
+
+    mock_s3 = MagicMock()
+    mock_s3.download_file.side_effect = fake_download
+    with patch("boto3.client", return_value=mock_s3), _redirect_cache(tmp_path / "cache"):
+        with pytest.raises(LayerError, match=r"layer #1 \(s3:/mybucket/checks/login.tgz\)"):
+            source_s3.acquire_tests("ignored", str(tmp_path / "tests"), time.time() + 60)
+
+
+def test_s3_read_timeout_is_layer_timeout(monkeypatch, tmp_path):
+    from botocore.exceptions import ReadTimeoutError
+    _s3_env(monkeypatch)
+    mock_s3 = MagicMock()
+    mock_s3.download_file.side_effect = ReadTimeoutError(endpoint_url="https://s3")
+    with patch("boto3.client", return_value=mock_s3), _redirect_cache(tmp_path / "cache"):
+        with pytest.raises(LayerTimeout, match="download timed out after"):
+            source_s3.acquire_tests("ignored", str(tmp_path / "tests"), time.time() + 60)
+
+
+@pytest.mark.parametrize("value", ['[1]', '[{"position": 1}]', '{"position": 1}', '[{"position": "1", '
+                                   '"host_path": "/h", "type": "directory", "container_path": "/c"}]'])
+def test_local_malformed_layers_env(tmp_path, monkeypatch, value):
+    monkeypatch.setenv("TEST_ARTIFACT_LAYERS", value)
+    with pytest.raises(RuntimeError, match="^TEST_ARTIFACT_LAYERS missing or invalid$"):
+        source_local.acquire_tests("x", str(tmp_path / "tests"), time.time() + 60)

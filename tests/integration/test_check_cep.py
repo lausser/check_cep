@@ -112,11 +112,9 @@ test('broken syntax', async ({ page }) => {
 
     output, code = run_check_cep(test_env["test_dir"], test_env["result_dir"])
 
-    # Playwright exits non-zero; check_cep maps this to CRITICAL or UNKNOWN
-    assert code in (2, 3), f"Expected exit 2 or 3, got {code}.\nOutput:\n{output}"
-    assert output.startswith(("CRITICAL -", "UNKNOWN -")), (
-        f"Expected CRITICAL or UNKNOWN prefix.\nOutput:\n{output}"
-    )
+    # An unloadable test file is a Playwright failure: CRITICAL only (spec 023 FR-052)
+    assert code == 2, f"Expected exit 2, got {code}.\nOutput:\n{output}"
+    assert output.startswith("CRITICAL -"), f"Expected CRITICAL prefix.\nOutput:\n{output}"
 
 
 # ---------------------------------------------------------------------------

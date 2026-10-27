@@ -17,50 +17,125 @@ refer to the [Playwright documentation](https://playwright.dev/docs/intro).
 
 ## Folder Structure
 
-Every test suite lives under a directory that the container mounts at
-`/home/pwuser/tests`.  Two layouts are valid:
+Every check runs on one tree, the *check root*: check_cep merges all
+`--test-artifact` layers, in order, into `/home/pwuser/tests` inside the
+container (see
+[README — Layers](README.md#layers)). The tree is a writable copy per run;
+the sources stay untouched. check_cep then picks one of two run modes,
+based on the merged tree as a whole.
 
-### Pattern A: Nested Enterprise Layout
+### Project-root mode (recommended)
 
-Shared helpers at the suite root, test cases in subdirectories:
+If the top of the merged tree contains a Playwright config
+(`playwright.config.ts`, `.js`, `.mts`, `.mjs`, `.cts`, `.cjs` — first match
+in that order), check_cep runs `npx playwright test --config <that file>`
+from the top. Playwright decides what runs, exactly as on a developer
+machine: `testDir`, `testMatch` (both `*.spec.ts` and `*.test.ts`), setup
+projects and dependencies.
 
 ```
+playwright.config.ts      # testDir: './tests'
+tsconfig.json             # path aliases work, e.g. "@shared/*": ["shared/*"]
+shared/
+  login.ts
 tests/
-  functions/          # Shared utility modules
-    gateway-helper.ts
-    index.ts
-  variables/          # Shared config, secrets
-    account.ts
-    index.ts
-  EXT/E2E_MON_Checks/Supermarket/YBIYRI/etl/prod/
-    be.test.ts
-    playwright.config.ts
+  auth.setup.ts           # setup project: writes playwright/.auth/user.json
+  login.spec.ts
+  checkout.spec.ts
 ```
 
-### Pattern B: Flat Per-Case Layout
+In the container this tree sits at the check root, so the specs are at
+`/home/pwuser/tests/tests/login.spec.ts`; the doubled `tests` is expected.
+
+- **Setup projects with `storageState`** work: the tree is writable, so
+  `playwright/.auth/user.json` can be written during the run.
+- **One browser per check**: the config names exactly one specific browser
+  that exists in the image (e.g. `browserName: 'chromium'`). Checking
+  another browser is a separate test case with its own config and its own
+  Naemon service. This differs from Playwright CI setups, which run every
+  project in every browser: in monitoring, one check is one monitored
+  behavior with one status, and a browser-specific failure must be visible
+  as its own service.
+- **Only image-provided packages** are available: `@playwright/test`,
+  `check-cep-helpers`, `check-cep-vision`, `opencv-wasm`, `pngjs`. A
+  `package.json` or `node_modules` in a layer is ignored; nothing is
+  installed at run time.
+- A config that selects no tests gives UNKNOWN (`Playwright configuration
+  playwright.config.ts matched no tests`); a syntax error in a spec or the
+  config is a test failure (CRITICAL).
+- Perfdata labels: with several spec files, each label is prefixed with the
+  file name without its suffix (`login.spec.ts` → `Login`); two files with
+  the same name in different folders use their path (`sub/login.spec.ts` →
+  `SubLogin`). Setup and teardown files keep their suffix in the
+  label (`auth.setup.ts` → `Auth.setup.ts`), as in earlier releases.
+
+#### A layered project
+
+Split the same project into layers — one with the root config and support
+code shared by many checks, one with the tests of this service:
+
+```
+layer 1 (shared)             layer 2 (service)
+  playwright.config.ts         tests/
+  tsconfig.json                  auth.setup.ts
+  shared/login.ts                login.spec.ts
+```
+
+```bash
+check_cep ... --test-artifact /omd/sites/x/etc/check_cep/layers/shared \
+              --test-artifact /omd/sites/x/etc/check_cep/tests/%h/%s.tgz
+```
+
+### Discovery mode
+
+Without a root config, check_cep looks for directories that contain
+`*.test.ts` or `*.test.js` and runs Playwright in the first one, in
+byte-wise path order (the top directory itself comes first). If other
+directories also contain test files, a warning lists them —
+`WARNING: test files also found in <dirs>; ignored`. It goes to the
+container's stderr, so it is visible with `--debug` or in `--shell`, not in
+the Nagios output. A `playwright.config.ts` next to the test files is used.
+Two layouts are common:
+
+#### Nested layout
+
+Shared helpers at the top, test cases in subdirectories:
+
+```
+functions/          # Shared utility modules
+  gateway-helper.ts
+  index.ts
+variables/          # Shared config and test data
+  account.ts
+  index.ts
+EXT/E2E_MON_Checks/Supermarket/YBIYRI/etl/prod/
+  be.test.ts
+  playwright.config.ts
+```
+
+#### Flat layout
 
 Each test case is self-contained with its own subdirectories:
 
 ```
-tests/
-  MyTestCase/
-    assets/               # Template PNGs for vision matching
-      login-btn.png
-    functions/            # Case-specific helpers (or empty)
-    variables/
-      index.ts            # Test data
-    pages/                # Local HTML fixtures (if applicable)
-      form.html
-    playwright.config.ts  # Render baseline config
-    MyTestCase.test.ts    # Test entry point
-    capture-templates.mjs # Standalone script to regenerate assets/
-    README.md             # Inline guidance
+MyTestCase/
+  assets/               # Template PNGs for vision matching
+    login-btn.png
+  functions/            # Case-specific helpers (or empty)
+  variables/
+    index.ts            # Test data
+  pages/                # Local HTML fixtures (if applicable)
+    form.html
+  playwright.config.ts  # Render baseline config
+  MyTestCase.test.ts    # Test entry point
+  capture-templates.mjs # Standalone script to regenerate assets/
+  README.md             # Inline guidance
 ```
 
 ### Discovery Rules
 
-The container's `run.py` walks the test directory looking for
-`*.test.ts` (or `*.test.js`) files.  It **skips** three directory names:
+In discovery mode, `run.py` walks the merged tree looking for `*.test.ts`
+(or `*.test.js`) files. It **skips** three directory names:
 
 - `functions` — shared utility modules
 - `variables` — configuration and test data
@@ -68,7 +143,33 @@ The container's `run.py` walks the test directory looking for
 
 Everything else is traversed.  The `assets/` and `pages/` directories
 are not skipped but contain no test files, so they are ignored by
-discovery.
+discovery. A merged tree without any test file gives UNKNOWN
+(`no *.test.ts/*.test.js found after merging N layer(s)`).
+
+### Secrets in tests
+
+Read secrets from `process.env` and pass them with `--environ` (see
+[README — Secrets](README.md#6-secrets-and---environ)):
+
+```ts
+const password = process.env.APP_PASSWORD;
+if (!password) throw new Error('APP_PASSWORD not set (pass --environ APP_PASSWORD)');
+await page.fill('#password', password);
+```
+
+Never put real secrets into a layer. For local development you may keep
+values in a `.env` file next to the config; Node's built-in loader needs no
+extra package and never overrides a variable that is already set, so
+`--environ` always wins:
+
+```ts
+import { existsSync } from 'node:fs';
+if (existsSync('.env')) process.loadEnvFile('.env'); // never overrides --environ
+```
+
+Prefer `--environ` over `.env` files in deployed layers. Avoid printing
+secrets or typing them where traces, screenshots or videos record them:
+masking (`***`) covers only the Nagios output.
 
 ---
 
@@ -1369,19 +1470,17 @@ runs on a schedule it needs **no** credential and involves **no**
 `chrome-devtools-mcp` or any other authoring tooling — those exist only in
 authoring mode:
 
-- `--environ` (and everything it can inject — `OPENCODE_API_KEY`,
-  `GEMINI_API_KEY`, `OPENCODE_MODEL`, …) takes effect **only** when
-  `--authoring` is passed. On scheduled runs and plain `--shell`, `--environ`
-  is inert (a warning is printed and nothing is injected), even if the named
-  host env var is set.
+- A deployed check receives no AI credential unless the operator explicitly
+  passes one with `--environ`. `--environ` works in every mode, but only the
+  names given on the command line reach the container; nothing — not even
+  an `OPENCODE_API_KEY` or `GEMINI_API_KEY` set in the host environment — is
+  forwarded implicitly.
 - The browser-inspection MCP server is registered only in the `ai` image and
   is never invoked by a packaged test at run time.
 
 To confirm on a production host: the deployed check runs green with no AI
-credential set, and the plugin never adds an `OPENCODE_API_KEY=…` or
-`GEMINI_API_KEY=…` `--env` to the podman command outside authoring mode
-(covered by the authoring env-injection tests in
-`tests/integration/test_modes.py`).
+credential set, and its command definition contains no `--environ` for an
+AI credential.
 
 ### Evaluating the authoring workflow (spec 021/022)
 

@@ -60,7 +60,7 @@ def make_config(**overrides) -> RunConfig:
         result_dest="local",
         logging="none",
         test_dir=None,
-        test_artifact=None,
+        test_artifacts=(),
         result_dir="/omd/var/tmp/check_cep/%h/%s/%t",
         testscripts_cache="/omd/var/tmp/check_cep_cache",
         report_retention=None,
@@ -108,6 +108,7 @@ def make_ctx(**overrides) -> RunContext:
         result_dir="/tmp/test_results",
         omd_root="",
         pid_file="/tmp/var/tmp/check_cep.testhost__TestService.pid",
+        layers=(),
         config=make_config(),
     )
     defaults.update(overrides)

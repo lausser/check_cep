@@ -14,6 +14,9 @@ from conftest import (
     make_config,
     make_ctx,
 )
+from conftest import _cep_mod
+
+resolve_layers = _cep_mod.resolve_layers
 
 
 # ---------------------------------------------------------------------------
@@ -129,19 +132,20 @@ def test_resolve_report_url_empty_bucket():
 # ---------------------------------------------------------------------------
 
 def test_build_env_vars_test_artifact_present():
-    ctx = make_ctx(config=make_config(test_artifact="/mybucket/checks/login.tgz"))
+    ctx = make_ctx(config=make_config(test_source="s3",
+                                      test_artifacts=("/mybucket/checks/login.tgz",)))
     env = build_env_vars(ctx)
     assert env["TEST_ARTIFACT"] == "/mybucket/checks/login.tgz"
 
 
 def test_build_env_vars_test_artifact_absent_when_not_set():
-    ctx = make_ctx(config=make_config(test_artifact=None))
+    ctx = make_ctx(config=make_config(test_artifacts=()))
     env = build_env_vars(ctx)
     assert "TEST_ARTIFACT" not in env
 
 
 def test_build_env_vars_s3_bucket_never_present():
-    ctx = make_ctx(config=make_config(test_artifact="/b/k.tgz", s3_endpoint="https://s3"))
+    ctx = make_ctx(config=make_config(test_artifacts=("/b/k.tgz",), s3_endpoint="https://s3"))
     env = build_env_vars(ctx)
     assert "S3_BUCKET" not in env
 
@@ -163,7 +167,7 @@ def _cmd_volumes(ctx):
 def test_podman_s3_mounts_testscripts_cache():
     ctx = make_ctx(config=make_config(
         test_source="s3",
-        test_artifact="/mybucket/checks/login.tgz",
+        test_artifacts=("/mybucket/checks/login.tgz",),
         testscripts_cache="/omd/var/tmp/tscache",
     ))
     volumes = _cmd_volumes(ctx)
@@ -173,7 +177,7 @@ def test_podman_s3_mounts_testscripts_cache():
 def test_podman_s3_no_tests_mount():
     ctx = make_ctx(config=make_config(
         test_source="s3",
-        test_artifact="/mybucket/checks/login.tgz",
+        test_artifacts=("/mybucket/checks/login.tgz",),
         testscripts_cache="/omd/var/tmp/tscache",
     ))
     volumes = _cmd_volumes(ctx)
@@ -181,30 +185,30 @@ def test_podman_s3_no_tests_mount():
     assert not any(":/home/pwuser/tests:" in v for v in volumes)
 
 
-def test_podman_local_tgz_mounts_input_artifact():
-    ctx = make_ctx(config=make_config(
-        test_source="local",
-        test_artifact="/omd/etc/mytests.tgz",
-    ))
-    volumes = _cmd_volumes(ctx)
-    assert any(":/home/pwuser/input-artifact.tgz:ro,z" in v for v in volumes)
+def _local_ctx(tmp_path, **config):
+    """A local-source context whose layers are resolved like main() does."""
+    cfg = make_config(test_source="local", **config)
+    layers = tuple(resolve_layers(cfg, str(tmp_path), "testhost", "TestService", "1"))
+    return make_ctx(config=cfg, layers=layers)
+
+
+def test_podman_local_tgz_mounts_layer(tmp_path):
+    (tmp_path / "mytests.tgz").write_bytes(b"")
+    volumes = _cmd_volumes(_local_ctx(tmp_path, test_artifacts=(str(tmp_path / "mytests.tgz"),)))
+    assert any(v.endswith(":/home/pwuser/layers/01.tgz:ro,z") for v in volumes)
+    assert not any("input-artifact" in v for v in volumes)
     assert not any(":/home/pwuser/tests:" in v for v in volumes)
 
 
-def test_podman_local_dir_mounts_tests():
-    ctx = make_ctx(config=make_config(
-        test_source="local",
-        test_artifact="/omd/etc/mytests/",
-    ))
-    volumes = _cmd_volumes(ctx)
-    assert any(":/home/pwuser/tests:ro,z" in v for v in volumes)
-    assert not any("input-artifact" in v for v in volumes)
+def test_podman_local_dir_mounts_layer(tmp_path):
+    (tmp_path / "mytests").mkdir()
+    volumes = _cmd_volumes(_local_ctx(tmp_path, test_artifacts=(str(tmp_path / "mytests"),)))
+    assert any(v.endswith(":/home/pwuser/layers/01:ro,z") for v in volumes)
+    assert not any(":/home/pwuser/tests:" in v for v in volumes)
 
 
-def test_podman_local_deprecated_test_dir_mounts_tests():
-    ctx = make_ctx(config=make_config(
-        test_source="local",
-        test_dir="/omd/etc/mylegacytests",
-    ))
-    volumes = _cmd_volumes(ctx)
-    assert any(":/home/pwuser/tests:ro,z" in v for v in volumes)
+def test_podman_local_deprecated_test_dir_mounts_layer(tmp_path):
+    (tmp_path / "legacy").mkdir()
+    volumes = _cmd_volumes(_local_ctx(tmp_path, test_dir=str(tmp_path / "legacy")))
+    assert f"{tmp_path / 'legacy'}:/home/pwuser/layers/01:ro,z" in volumes
+    assert not any(":/home/pwuser/tests:" in v for v in volumes)
