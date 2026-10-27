@@ -1,5 +1,21 @@
 <!--
-Sync Impact Report (2026-10-26, spec 023, amendment 3)
+Sync Impact Report (2026-10-27, spec 024)
+- Version change: 2.2.1 → 2.3.0 (MINOR: material expansion of the
+  container I/O contract and the Playwright pinning rule)
+- Amended principles:
+  - IV. Container I/O Contract — output files: `test-meta.json` gains
+    `versions` (`plugin`, `image`, `playwright`; each `"unknown"` when
+    not determinable); environment: the host passes
+    `CEP_PLUGIN_VERSION` (reserved name)
+  - Technical Constraints — Playwright: version and base-image digest
+    defined once in `src/container/versions.env`; `package.json` pins
+    exactly; `package-lock.json` is a committed derivation; builds fail
+    on disagreement (replaces "version pinned in package-lock.json")
+- Templates requiring updates: none
+- Approval: PENDING (maintainer)
+- Follow-up TODOs: none
+
+Previous report (2026-10-26, spec 023, amendment 3)
 - Version change: 2.2.0 → 2.2.1 (PATCH: container paths spelled as in
   the code — `/home/pwuser/results`, `/home/pwuser/testscripts-cache`;
   no semantic change)
@@ -238,8 +254,11 @@ respect it; exceeding it is a protocol code 3.
 - `test-meta.json` — runtime metadata (v2 schema): `started`
   (Unix epoch of host process start, from `CEP_STARTED` env var),
   `finished` (Unix epoch at write time), hostname, service,
-  exit code, duration, probe location, status, and `layers`
-  (position, host path, type — never contents or injected values).
+  exit code, duration, probe location, status, `layers`
+  (position, host path, type — never contents or injected values),
+  and `versions` (`plugin` from `CEP_PLUGIN_VERSION`, `image` from
+  the image's `CEP_IMAGE_VERSION`, `playwright` from the image's
+  `PLAYWRIGHT_VERSION`; each `"unknown"` when not determinable).
 - `playwright-report/` — HTML report directory.
 - `screenshots/` — failure screenshots.
 
@@ -258,6 +277,10 @@ sets itself are reserved and rejected for `--environ`. Key variables:
   `check_cep` process start time. Used by `run.py` to populate
   `test-meta.json["started"]` and to identify the run directory
   when `%t` is used in `--result-dir`.
+- `CEP_PLUGIN_VERSION` — release version of the host plugin
+  (`CEP_VERSION`), passed on every run (reserved name). A plugin/image
+  version mismatch is diagnostic only (`--debug`) and never changes
+  the check result.
 
 **Exit-code protocol**: `run.py` MUST normalize its exit code to
 exactly one of:
@@ -327,8 +350,11 @@ only present when explicitly configured.
 - **Runtime**: Python 3 for both the host plugin and container
   orchestration.
 - **Container Engine**: Podman or Docker (rootless preferred).
-- **Playwright**: Installed inside the container via npm; version
-  pinned in `package-lock.json`.
+- **Playwright**: Installed inside the container via npm. The
+  Playwright version and the base-image digest are defined once in
+  `src/container/versions.env`; `package.json` pins
+  `@playwright/test` exactly; `package-lock.json` is a committed
+  derivation. Builds MUST fail when these sources disagree.
 - **Monitoring Platform**: OMD (Open Monitoring Distribution) with
   Naemon core.
 - **Host OS**: Linux (RHEL/Fedora family expected, but not
@@ -377,4 +403,4 @@ proposals MUST verify compliance with the principles above.
 note confirming which principles were considered and how compliance
 was ensured.
 
-**Version**: 2.2.1 | **Ratified**: 2026-03-02 | **Last Amended**: 2026-10-26
+**Version**: 2.3.0 | **Ratified**: 2026-03-02 | **Last Amended**: 2026-10-27
