@@ -1165,8 +1165,10 @@ pure Playwright locators.
 > still incomplete, so it only works for really simple web pages today.
 > If it doesn't work for your test, use Chromium (the default).
 >
-> The container ships Lightpanda **0.3.4** (native binary, pinned in
-> `src/container/Dockerfile`).
+> The container ships Lightpanda **1.0.2** (native binary, pinned in
+> `src/container/Dockerfile`). The capability notes below were verified on
+> 0.3.4; on 1.0.2 the integration lane (navigation/DOM queries, failure,
+> timeout and syntax verdicts) passes unchanged.
 
 ### What Works
 

@@ -43,7 +43,7 @@ WORKDIR /home/pwuser
 # - We also point LIGHTPANDA_EXECUTABLE_PATH at the final stable install path
 #   before `npm ci` so the package postinstall does not download a moving
 #   nightly binary into ~/.cache and accidentally override the pin.
-ARG LIGHTPANDA_BROWSER_VERSION=0.3.4
+ARG LIGHTPANDA_BROWSER_VERSION=1.0.2
 ENV LIGHTPANDA_DISABLE_TELEMETRY=true \
     LIGHTPANDA_EXECUTABLE_PATH=/usr/local/bin/lightpanda
 

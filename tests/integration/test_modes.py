@@ -120,41 +120,16 @@ def test_local(
 # ---------------------------------------------------------------------------
 # Local mode — Lightpanda browser
 # ---------------------------------------------------------------------------
-# Lightpanda 0.3.4 CDP support (verified empirically — spec 018, cross-checked
-# against the browser changelog and the official lightpanda-io/demo). What works:
-# goto() + read-only DOM queries; text/password fill() (the DOM value IS written
-# — confirmed via page.evaluate); locator.click() on SIMPLE/static pages (an
-# example.com link-click navigates on 0.3.4, matching the demo); and the
-# failure/timeout verdict paths (same Nagios output as Chromium).
+# Lightpanda 1.0.2 CDP support is verified empirically in this lane. Read-only
+# navigation/DOM queries and the syntax, failure, and timeout verdict paths are
+# deterministic. Vision remains Chromium-only because Lightpanda has no visual
+# rendering engine.
 #
-# What does NOT work reliably under Playwright's CDP driver — the reason tc_pass
-# and tc_register_pass stay Chromium-only:
-#   - locator.click() HANGS on complex/JS-heavy real pages (e.g.
-#     practice.expandtesting.com): the target element is found (count=1) but
-#     Playwright's actionability handshake never completes → timeout. Simple
-#     static pages click fine; heavy app pages do not.
-#   - fill() on <input type=number|date> throws InvalidStateError (setSelection
-#     semantics), so those field types stay Chromium-only.
-#   - getByText()/toHaveValue() matchers are unreliable on some pages.
-#   - Vision fixtures are permanently Chromium-only (no rendering engine).
-# We keep only fixtures that pass deterministically; interactive checks against
-# heavy target sites remain Chromium-only for now.
-#
-# The click hang is ARCHITECTURAL, not a version bug: Lightpanda has no CSS
-# layout engine — element geometry comes from inline styles/attributes and
-# sibling order against a fixed 1920x1080 viewport, so Playwright's
-# "receives events" hit test (elementFromPoint must return the target) cannot
-# converge on CSS-framework pages. Full analysis:
-# specs/018-lightpanda-034-upgrade/dual-engine-assessment.md (R6).
-#
-# tc_pass runs as a strict-xfail CANARY with Chromium-lane expectations. It is
-# a BROAD interaction canary: tc_pass trips on the first unsupported interaction
-# — a number-input fill() (`#input-number`) that raises InvalidStateError,
-# ~20s → CRITICAL → XFAIL (suite green) — and it never even reaches its click.
-# So an XPASS requires the engine to broadly support interaction (number/date
-# fill AND click actionability AND value read-back), not just one fix. The day a
-# Lightpanda pin bump makes it return OK, strict=True turns the XPASS into a
-# suite failure — the signal to re-review fixture promotion.
+# `tc_pass` remains a strict-xfail canary for normal Playwright interaction. On
+# 1.0.2, number/date fills and the display-button click complete, but the page
+# does not reflect the number input in `#output-number`; the Chromium-equivalent
+# assertion therefore fails. An XPASS means the full fixture interaction and
+# value propagation work, signalling that its promotion should be re-reviewed.
 FIXTURES_LIGHTPANDA = [
     ("tc_lp_pass", 0, "OK -", [], None),
     ("tc_syntax", 2, "CRITICAL -", [], None),
