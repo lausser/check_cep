@@ -130,18 +130,10 @@ A Playwright upgrade is a patch release.
 
 ## Bootstrap: 0.23.0
 
-`0.23.0` marks spec 023 (`a6080c8`) retroactively. It is a local annotated
-tag; that commit has no workflow, so no image is built for it.
-
-```bash
-git push origin 0.23.0
-gh release create 0.23.0 --verify-tag --title "check_cep 0.23.0" \
-  --notes "$(python3 scripts/release.py notes 0.23.0)"
-```
-
-Run this from a current `main`: the notes come from the versioned spec 023
-chapter in today's CHANGES.md, not from `a6080c8`, whose chapter had no
-version heading yet.
+`0.23.0` marks spec 023 (`a6080c8`) retroactively. It is an annotated tag
+only: no GitHub Release and no image (that commit has no workflow). The
+first published release is `0.24.0`. Pushing the tag is optional
+(`git push origin 0.23.0`); it does not trigger a build.
 
 ## Validating the workflow locally
 

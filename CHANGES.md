@@ -9,6 +9,27 @@ From 0.23.0 on, each release has a versioned heading
 
 ---
 
+## 0.24.1 — Unreleased — Playwright v1.64.0
+
+### Changed
+
+- Playwright 1.60.0 → 1.64.0: base image
+  `mcr.microsoft.com/playwright:v1.64.0-noble` pinned by its index digest
+  `sha256:06a9939e57531807f8d5fd76ce44b53165ffb7d7501d87ab10e285c20b1e971f`;
+  `@playwright/test` 1.64.0 (lockfile regenerated; Playwright now requires
+  Node ≥ 20 and drops its optional macOS `fsevents` dependency).
+- Image tag alias becomes `0.24.1-pw1.64.0`; `0.24` and `latest` move to
+  0.24.1, `0.24.0` is unchanged.
+- `0.23.0` remains a tag only, without a GitHub Release (RELEASING.md).
+
+### Verification
+
+- `make test-all` on 1.64.0: 120 passed, 12 skipped, 1 xfailed, 0 failed —
+  identical to the 1.60.0 baseline (same skipped/xfailed tests), including
+  the Lightpanda/CDP lane and the spectate/slowMo/VNC tests.
+
+---
+
 ## 0.24.0 — 2026-10-28 — Spec 024 — Professional Versioning and Image Publishing
 
 **Branch**: `024-versioning-image-publishing`
