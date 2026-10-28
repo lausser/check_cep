@@ -9,7 +9,7 @@ From 0.23.0 on, each release has a versioned heading
 
 ---
 
-## Spec 024 — Professional Versioning and Image Publishing
+## 0.24.0 — 2026-10-28 — Spec 024 — Professional Versioning and Image Publishing
 
 **Branch**: `024-versioning-image-publishing`
 
