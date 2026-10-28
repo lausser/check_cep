@@ -12,7 +12,7 @@ Sync Impact Report (2026-10-27, spec 024)
     exactly; `package-lock.json` is a committed derivation; builds fail
     on disagreement (replaces "version pinned in package-lock.json")
 - Templates requiring updates: none
-- Approval: PENDING (maintainer)
+- Approval: Gerhard Lausser (maintainer), 2026-10-27 17:17 CET (committed as d3cfc2e)
 - Follow-up TODOs: none
 
 Previous report (2026-10-26, spec 023, amendment 3)
