@@ -4,9 +4,71 @@ Each section corresponds to a completed specification (spec). Specs are
 the unit of release — when a spec is finished and merged, it becomes
 available in the next container image build.
 
+From 0.23.0 on, each release has a versioned heading
+(`## X.Y.Z — YYYY-MM-DD — …`); see RELEASING.md.
+
 ---
 
-## Spec 023 — Layered Test Artifacts, Playwright Project Layout and Secret Injection
+## Spec 024 — Professional Versioning and Image Publishing
+
+**Branch**: `024-versioning-image-publishing`
+
+### Summary
+
+check_cep gets a release identity and a publish path. `VERSION` (SemVer,
+canonical) is stamped into the plugin as `CEP_VERSION`; `check_cep
+--version` prints `check_cep X.Y.Z`. Images carry OCI labels and report
+their version; every run records plugin, image and Playwright version in
+`test-meta.json`. `scripts/release.py` cuts a release locally (dated
+CHANGES heading, release commit, annotated tag); pushing the tag publishes
+the image to `ghcr.io/lausser/check_cep` and creates a GitHub Release.
+Procedure and checklist: RELEASING.md.
+
+### Added
+
+- `VERSION` file and `CEP_VERSION` in `src/check_cep`; `--version`.
+- Image labels `org.opencontainers.image.{version,revision,source,created,title}`
+  and `io.consol.check_cep.playwright.version`; image ENV `CEP_IMAGE_VERSION`.
+- `test-meta.json` key `versions` (`plugin`, `image`, `playwright`; each
+  `"unknown"` when not determinable, e.g. with an older image).
+- The plugin passes `CEP_PLUGIN_VERSION` into every container; with
+  `--debug` a plugin/image difference is logged as
+  `version mismatch: plugin X, image Y`. The check result never changes.
+- `src/container/versions.env`: single source of the Playwright version
+  and the base-image digest (`mcr.microsoft.com/playwright:v1.60.0-noble`
+  pinned by its index digest). `package.json` pins `@playwright/test`
+  exactly; `scripts/check-versions.py` fails every `make image*` target
+  and CI when the sources disagree, and the build asserts the bundled
+  Playwright version.
+- `scripts/release.py prepare | notes | aliases`.
+- `.github/workflows/image.yml`: PRs and `main` pushes run version checks,
+  unit tests and an image build; release tags `X.Y.Z[-rc.N]` publish
+  `X.Y.Z`, `X.Y.Z-pwP.Q.R` (immutable) and, for final releases, `X.Y` and
+  `latest` (never moved backwards), linux/amd64.
+- README "Installing from ghcr.io" (pinning recommendations), RELEASING.md.
+- `make image` also tags `localhost/check_cep:<VERSION>`.
+
+### Changed
+
+- Lightpanda browser binary 0.3.4 → 1.0.2. The Lightpanda lane fixture
+  `tc_lp_pass` now asserts the stable IANA link on example.com instead of
+  the page's `h1`/paragraph text, which made it fail on the live site.
+
+### Breaking
+
+- `podman build` of `src/container` requires the build-args
+  `PLAYWRIGHT_VERSION`, `PLAYWRIGHT_BASE_DIGEST`, `CEP_VERSION`, `VCS_REF`
+  and `BUILD_DATE` (no defaults). Use `make image`, or see README §1.
+- `PLAYWRIGHT_VERSION` (Makefile variable and image ENV) changes format
+  from `v1.60.0` to `1.60.0`; it is no longer overridable on the `make`
+  command line — edit `src/container/versions.env`. Local image tags keep
+  the `v` (`localhost/check_cep:v1.60.0`).
+- `CEP_PLUGIN_VERSION` is a new reserved name; `--environ
+  CEP_PLUGIN_VERSION=…` is rejected with UNKNOWN.
+
+---
+
+## 0.23.0 — 2026-10-27 — Spec 023 — Layered Test Artifacts, Playwright Project Layout and Secret Injection
 
 **Branch**: `023-layered-artifacts-secrets`
 

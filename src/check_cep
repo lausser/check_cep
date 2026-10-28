@@ -26,6 +26,9 @@ import urllib.parse
 from logging.handlers import RotatingFileHandler
 from typing import Any, Dict, List, NamedTuple, Optional, Protocol, Tuple
 
+# stamped by scripts/release.py from VERSION — do not edit
+CEP_VERSION = "0.23.0"
+
 logger = logging.getLogger("check_cep")
 
 # Exit codes
@@ -675,6 +678,7 @@ RESERVED_ENV_NAMES = frozenset({
     "TEST_SOURCE", "RESULT_DEST", "LOGGING", "PWTIMEOUT", "PROBE_LOCATION",
     "TESTIDENT", "TERM", "FORCE_COLOR", "CEP_STARTED", "DEBUG", "HEADED",
     "BROWSER", "REPORT_PATH", "CEP_SLOW_MO", "CEP_VISION_HIGHLIGHT_MS",
+    "CEP_PLUGIN_VERSION",
 })
 RESERVED_ENV_PREFIXES = ("NAGIOS_", "TEST_ARTIFACT", "S3_", "AWS_", "LOKI_")
 
@@ -753,6 +757,7 @@ def build_env_vars(ctx: RunContext) -> Dict[str, str]:
         "TERM": "dumb",
         "FORCE_COLOR": "false",
         "CEP_STARTED": ctx.started_str,
+        "CEP_PLUGIN_VERSION": CEP_VERSION,
     }
 
     if ctx.config.debug:
@@ -1436,6 +1441,25 @@ def check_duplicate_container(stderr: str) -> bool:
     return "Error: creating container storage" in stderr and "is already in use" in stderr
 
 
+def log_version_mismatch(result_dir: str) -> None:
+    """Log a plugin/image version mismatch from test-meta.json (spec 024 FR-016).
+
+    Diagnostic only: unknown versions are not compared, and an unreadable or
+    incomplete test-meta.json is ignored — the check result never depends on it.
+    """
+    try:
+        with open(os.path.join(result_dir, "test-meta.json"), encoding="utf-8") as f:
+            versions = json.load(f)["versions"]
+        plugin, image = versions["plugin"], versions["image"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return
+    if not (isinstance(plugin, str) and isinstance(image, str)):
+        return
+    if "unknown" in (plugin, image) or plugin == image:
+        return
+    logger.debug(f"version mismatch: plugin {plugin}, image {image}")
+
+
 # ---------------------------------------------------------------------------
 # Report URL template resolution
 # ---------------------------------------------------------------------------
@@ -1710,6 +1734,7 @@ class ContainerEnv:
 def build_argument_parser() -> ArgumentParser:
     """Build CLI argument parser with all 26+ arguments from data-model.md."""
     parser = ArgumentParser(description="CEP - Containerized E2E Playwright monitoring plugin")
+    parser.add_argument("--version", action="version", version=f"check_cep {CEP_VERSION}")
 
     # Required arguments
     parser.add_argument("--host-name", required=True, dest="host_name",
@@ -2251,6 +2276,9 @@ def main() -> int:
                 test_meta = json.load(f)
         except (json.JSONDecodeError, IOError):
             pass
+
+    if ctx.config.debug:
+        log_version_mismatch(ctx.result_dir)
 
     # Build report annotation (T024)
     annotation = ""

@@ -52,8 +52,8 @@ def test_reserved_tables_are_exact():
     assert cep.RESERVED_ENV_NAMES == frozenset(
         "TEST_SOURCE RESULT_DEST LOGGING PWTIMEOUT PROBE_LOCATION TESTIDENT TERM "
         "FORCE_COLOR CEP_STARTED DEBUG HEADED BROWSER REPORT_PATH CEP_SLOW_MO "
-        "CEP_VISION_HIGHLIGHT_MS".split())
-    assert len(cep.RESERVED_ENV_NAMES) == 15
+        "CEP_VISION_HIGHLIGHT_MS CEP_PLUGIN_VERSION".split())
+    assert len(cep.RESERVED_ENV_NAMES) == 16
     assert cep.RESERVED_ENV_PREFIXES == ("NAGIOS_", "TEST_ARTIFACT", "S3_", "AWS_", "LOKI_")
 
 
@@ -226,3 +226,20 @@ def test_vnc_drops_user_display_variables():
     env = build_env_vars(ctx)
     assert "DISPLAY" not in env and "WAYLAND_DISPLAY" not in env
     assert "DISPLAY" not in _env_names(_argv(ctx))
+
+
+# ---------------------------------------------------------------------------
+# spec 024: plugin version passed into every container (C-2)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("mode", [None, "shell", "headed", "vnc", "authoring"])
+def test_plugin_version_in_every_mode(x11, tmp_path, mode):
+    overrides = {mode: True} if mode else {}
+    ctx = make_ctx(omd_root=str(tmp_path), config=make_config(**overrides))
+    assert build_env_vars(ctx)["CEP_PLUGIN_VERSION"] == cep.CEP_VERSION
+    assert "CEP_PLUGIN_VERSION" in _env_names(_argv(ctx))
+
+
+def test_plugin_version_is_reserved():
+    with pytest.raises(ValueError, match="reserved"):
+        parse_environ_arg("CEP_PLUGIN_VERSION=x")

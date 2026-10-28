@@ -95,6 +95,9 @@ fi
 # ---------------------------------------------------------------------------
 
 CONTAINER_DIR="$OMD_ROOT/etc/check_cep/container"
+# Image build-args (spec 024): release version and the source revision.
+CEP_VERSION="$(cat "$REPO_DIR/VERSION")"
+VCS_REF="$(git -C "$REPO_DIR" rev-parse HEAD 2>/dev/null || echo unknown)"
 mkdir -p "$CONTAINER_DIR/image/plugins"
 
 cp -r "$REPO_DIR/src/container/." "$CONTAINER_DIR/"
@@ -122,9 +125,17 @@ cat <<EOF
 
 Done. Next steps:
 
-  Build the container image (adjust the Playwright version as needed):
+  Build the container image (or run 'make image' in the repository; the
+  Playwright version and base digest come from $CONTAINER_DIR/versions.env):
     cd $CONTAINER_DIR
-    podman build --build-arg PLAYWRIGHT_VERSION=v1.58.2 -t localhost/check_cep:latest .
+    . ./versions.env
+    podman build --target base \\
+      --build-arg PLAYWRIGHT_VERSION=\$PLAYWRIGHT_VERSION \\
+      --build-arg PLAYWRIGHT_BASE_DIGEST=\$PLAYWRIGHT_BASE_DIGEST \\
+      --build-arg CEP_VERSION=$CEP_VERSION \\
+      --build-arg VCS_REF=$VCS_REF \\
+      --build-arg BUILD_DATE=\$(date -u +%Y-%m-%dT%H:%M:%SZ) \\
+      -t localhost/check_cep:$CEP_VERSION -t localhost/check_cep:latest .
 
   A demo test (DEMOHOST/DEMOSERVICE) and Naemon config were deployed from omd-demo/:
     $OMD_ROOT/etc/check_cep/tests/DEMOHOST/DEMOSERVICE/

@@ -1,0 +1,293 @@
+# Build and publish the check_cep container image (spec 024,
+# contracts/release-and-publish.md W-1).
+#
+#   pull_request, push to main  → test: version checks, unit tests, image build (no push)
+#   push of a release tag X.Y.Z[-rc.N] → test + gate + publish to ghcr.io and a GitHub Release
+#
+# Release tags are created locally by scripts/release.py and pushed by the
+# maintainer (RELEASING.md). Third-party actions are pinned by commit SHA.
+name: image
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+    tags: ['*']
+
+permissions:
+  contents: read
+
+env:
+  IMAGE: ghcr.io/lausser/check_cep
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.12'
+
+      - name: Check version sources
+        run: python3 scripts/check-versions.py
+
+      - name: Unit tests
+        run: |
+          python3 -m pip install --quiet pytest pyyaml boto3
+          python3 -m pytest tests/unit -q
+
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          docker system prune -af
+          df -h /
+
+      - name: Build arguments
+        id: args
+        run: |
+          # shellcheck source=/dev/null
+          . src/container/versions.env
+          {
+            echo "playwright_version=$PLAYWRIGHT_VERSION"
+            echo "playwright_base_digest=$PLAYWRIGHT_BASE_DIGEST"
+            echo "cep_version=$(tr -d '[:space:]' < VERSION)"
+            echo "build_date=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          } >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Build image (no push)
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: src/container
+          target: base
+          platforms: linux/amd64
+          push: false
+          provenance: false
+          sbom: false
+          build-args: |
+            PLAYWRIGHT_VERSION=${{ steps.args.outputs.playwright_version }}
+            PLAYWRIGHT_BASE_DIGEST=${{ steps.args.outputs.playwright_base_digest }}
+            CEP_VERSION=${{ steps.args.outputs.cep_version }}
+            VCS_REF=${{ github.sha }}
+            BUILD_DATE=${{ steps.args.outputs.build_date }}
+
+  gate:
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-24.04
+    outputs:
+      release_tag: ${{ steps.check.outputs.release_tag }}
+      prerelease: ${{ steps.check.outputs.prerelease }}
+    steps:
+      - name: Is this a release tag?
+        id: check
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          release_tag=false
+          prerelease=false
+          if printf '%s\n' "$TAG" | grep -Eq '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-rc\.(0|[1-9][0-9]*))?$'; then
+            release_tag=true
+            case "$TAG" in *-rc.*) prerelease=true ;; esac
+          else
+            echo "::notice::tag $TAG is not a release tag; nothing is published"
+          fi
+          echo "release_tag=$release_tag" >> "$GITHUB_OUTPUT"
+          echo "prerelease=$prerelease" >> "$GITHUB_OUTPUT"
+
+  publish:
+    needs: [test, gate]
+    if: needs.gate.outputs.release_tag == 'true'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      packages: write
+    concurrency:
+      group: ghcr-publish
+      cancel-in-progress: false
+    env:
+      TAG: ${{ github.ref_name }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify tag, revision and version sources
+        id: meta
+        run: |
+          set -euo pipefail
+          REV=$(git rev-parse "$GITHUB_REF^{commit}")
+          if [ "$REV" != "$GITHUB_SHA" ]; then
+            echo "::error::tag $TAG points to $REV, but the workflow runs for $GITHUB_SHA"; exit 1
+          fi
+          VERSION=$(tr -d '[:space:]' < VERSION)
+          if [ "$TAG" != "$VERSION" ]; then
+            echo "::error::tag $TAG does not match VERSION $VERSION"; exit 1
+          fi
+          python3 scripts/check-versions.py
+          # shellcheck source=/dev/null
+          . src/container/versions.env
+          ALIAS_LINES=$(python3 scripts/release.py aliases "$TAG")
+          mapfile -t ALIASES <<< "$ALIAS_LINES"
+          echo "Tags for this release:"; printf '  %s\n' "${ALIASES[@]}"
+          {
+            echo "rev=$REV"
+            echo "playwright_version=$PLAYWRIGHT_VERSION"
+            echo "playwright_base_digest=$PLAYWRIGHT_BASE_DIGEST"
+            echo "build_date=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo "aliases=${ALIASES[*]}"
+            echo "image_tags<<EOF"
+            for alias in "${ALIASES[@]}"; do echo "$IMAGE:$alias"; done
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      # Both immutable tags are inspected before anything is built or pushed;
+      # decision table: contracts/release-and-publish.md W-1 step 3.
+      - name: Inspect existing release image
+        id: existing
+        env:
+          REV: ${{ steps.meta.outputs.rev }}
+          PLAYWRIGHT_VERSION: ${{ steps.meta.outputs.playwright_version }}
+        run: |
+          set -euo pipefail
+          inspect() {  # <ref> <format>: JSON, or "absent" if the tag does not exist; fails closed otherwise
+            local out
+            if out=$(docker buildx imagetools inspect "$1" --format "$2" 2>"$RUNNER_TEMP/inspect.err"); then
+              printf '%s\n' "$out"
+            elif grep -qiE 'not found|manifest unknown' "$RUNNER_TEMP/inspect.err"; then
+              echo absent
+            else
+              cat "$RUNNER_TEMP/inspect.err" >&2
+              return 1
+            fi
+          }
+          labels() {  # image config (single image, or a platform map) → linux/amd64 release labels
+            python3 -c '
+          import json, sys
+          cfg = json.load(sys.stdin)
+          if "config" not in cfg:
+              cfg = cfg["linux/amd64"]
+          labels = cfg["config"]["Labels"]
+          for key in ("org.opencontainers.image.version", "org.opencontainers.image.revision",
+                      "io.consol.check_cep.playwright.version"):
+              print(f"{key}={labels[key]}")
+          '
+          }
+          digest() { python3 -c 'import json, sys; print(json.load(sys.stdin)["digest"])'; }
+
+          PW_TAG="$TAG-pw$PLAYWRIGHT_VERSION"
+          main_cfg=$(inspect "$IMAGE:$TAG" '{{json .Image}}')
+          pw_manifest=$(inspect "$IMAGE:$PW_TAG" '{{json .Manifest}}')
+          if [ "$main_cfg" = absent ]; then
+            if [ "$pw_manifest" != absent ]; then
+              echo "::error::$IMAGE:$PW_TAG exists but $IMAGE:$TAG does not; nothing changed"; exit 1
+            fi
+            echo "action=build" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          expected=$(printf '%s\n' "org.opencontainers.image.version=$TAG" \
+            "org.opencontainers.image.revision=$REV" \
+            "io.consol.check_cep.playwright.version=$PLAYWRIGHT_VERSION")
+          found=$(printf '%s\n' "$main_cfg" | labels)
+          if [ "$found" != "$expected" ]; then
+            echo "::error::$IMAGE:$TAG exists with different labels; nothing changed"
+            printf 'found:\n%s\nexpected:\n%s\n' "$found" "$expected"
+            exit 1
+          fi
+          main_digest=$(inspect "$IMAGE:$TAG" '{{json .Manifest}}' | digest)
+          if [ "$pw_manifest" != absent ] && [ "$(printf '%s\n' "$pw_manifest" | digest)" != "$main_digest" ]; then
+            echo "::error::$IMAGE:$PW_TAG has a different digest than $IMAGE:$TAG; nothing changed"; exit 1
+          fi
+          echo "$IMAGE:$TAG already published ($main_digest); repairing aliases only"
+          echo "action=repair" >> "$GITHUB_OUTPUT"
+          if [ "$pw_manifest" = absent ]; then
+            echo "pw_present=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "pw_present=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Free disk space
+        if: steps.existing.outputs.action == 'build'
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          docker system prune -af
+          df -h /
+
+      - name: Build and push
+        if: steps.existing.outputs.action == 'build'
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: src/container
+          target: base
+          platforms: linux/amd64
+          push: true
+          provenance: false
+          sbom: false
+          tags: ${{ steps.meta.outputs.image_tags }}
+          build-args: |
+            PLAYWRIGHT_VERSION=${{ steps.meta.outputs.playwright_version }}
+            PLAYWRIGHT_BASE_DIGEST=${{ steps.meta.outputs.playwright_base_digest }}
+            CEP_VERSION=${{ env.TAG }}
+            VCS_REF=${{ steps.meta.outputs.rev }}
+            BUILD_DATE=${{ steps.meta.outputs.build_date }}
+
+      - name: Repair missing and floating tags
+        if: steps.existing.outputs.action == 'repair'
+        env:
+          ALIASES: ${{ steps.meta.outputs.aliases }}
+          PW_PRESENT: ${{ steps.existing.outputs.pw_present }}
+          PW_TAG: ${{ env.TAG }}-pw${{ steps.meta.outputs.playwright_version }}
+        run: |
+          set -euo pipefail
+          # Immutable tags are only ever created, never rewritten: skip X.Y.Z
+          # and an existing X.Y.Z-pwP.Q.R (its digest was verified above).
+          for alias in $ALIASES; do
+            [ "$alias" = "$TAG" ] && continue
+            [ "$alias" = "$PW_TAG" ] && [ "$PW_PRESENT" = true ] && continue
+            docker buildx imagetools create -t "$IMAGE:$alias" "$IMAGE:$TAG"
+          done
+
+      - name: Verify all tags resolve to one digest
+        env:
+          ALIASES: ${{ steps.meta.outputs.aliases }}
+        run: |
+          set -euo pipefail
+          digest() { docker buildx imagetools inspect "$1" --format '{{json .Manifest}}' |
+                     python3 -c 'import json, sys; print(json.load(sys.stdin)["digest"])'; }
+          want=$(digest "$IMAGE:$TAG")
+          for alias in $ALIASES; do
+            got=$(digest "$IMAGE:$alias")
+            echo "$IMAGE:$alias $got"
+            if [ "$got" != "$want" ]; then
+              echo "::error::$IMAGE:$alias resolves to $got, expected $want"; exit 1
+            fi
+          done
+
+      - name: GitHub Release
+        env:
+          PRERELEASE: ${{ needs.gate.outputs.prerelease }}
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "release $TAG already exists"
+            exit 0
+          fi
+          python3 scripts/release.py notes "$TAG" > "$RUNNER_TEMP/notes.md"
+          flags=()
+          if [ "$PRERELEASE" = true ]; then flags+=(--prerelease); fi
+          gh release create "$TAG" --verify-tag --title "check_cep $TAG" \
+            --notes-file "$RUNNER_TEMP/notes.md" "${flags[@]}"

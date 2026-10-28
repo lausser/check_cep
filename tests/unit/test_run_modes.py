@@ -420,3 +420,42 @@ def test_main_project_root_no_tests_is_unknown(fake_container, monkeypatch, caps
     assert "Playwright configuration playwright.config.ts matched no tests" in capsys.readouterr().out
     assert meta["status"] == "UNKNOWN"
     assert plugin.published == [3]
+
+
+# ---------------------------------------------------------------------------
+# spec 024: versions block in test-meta.json (C-4)
+# ---------------------------------------------------------------------------
+
+_VERSION_ENV = {"plugin": "CEP_PLUGIN_VERSION", "image": "CEP_IMAGE_VERSION",
+                "playwright": "PLAYWRIGHT_VERSION"}
+
+
+def _meta(tmp_path):
+    return run.write_test_meta(str(tmp_path), "h", "s", 0, 1.5, "loc", "1700000000", layers=[])
+
+
+def test_test_meta_versions_from_env(tmp_path, monkeypatch):
+    monkeypatch.setenv("CEP_PLUGIN_VERSION", "0.24.0")
+    monkeypatch.setenv("CEP_IMAGE_VERSION", "0.23.0")
+    monkeypatch.setenv("PLAYWRIGHT_VERSION", "1.60.0")
+    meta = _meta(tmp_path)
+    assert meta["versions"] == {"plugin": "0.24.0", "image": "0.23.0", "playwright": "1.60.0"}
+    on_disk = json.loads((tmp_path / "test-meta.json").read_text())
+    assert on_disk["versions"] == meta["versions"]
+    for key in ("started", "finished", "hostname", "servicedescription", "exitcode",
+                "duration", "probe_location", "status", "layers"):
+        assert key in on_disk
+
+
+@pytest.mark.parametrize("missing", sorted(_VERSION_ENV))
+@pytest.mark.parametrize("how", ["unset", "empty"])
+def test_test_meta_versions_unknown(tmp_path, monkeypatch, missing, how):
+    for key, name in _VERSION_ENV.items():
+        monkeypatch.setenv(name, f"v-{key}")
+    if how == "unset":
+        monkeypatch.delenv(_VERSION_ENV[missing])
+    else:
+        monkeypatch.setenv(_VERSION_ENV[missing], "")
+    versions = _meta(tmp_path)["versions"]
+    for key in _VERSION_ENV:
+        assert versions[key] == ("unknown" if key == missing else f"v-{key}")

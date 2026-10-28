@@ -55,28 +55,73 @@ Then log in as `cep` in a **new SSH session** (not `su`) and run a test check.
 
 ---
 
-## 1. Build the Container Image
+## 1. Get the Container Image
 
-The image is built from the `src/` directory. You must pass the Playwright version
-as a build argument. The version determines which Microsoft Playwright base image
-is used.
+### Installing from ghcr.io
+
+Released images are published to the GitHub Container Registry
+(linux/amd64 only):
 
 ```bash
-cd src/
-podman build \
-  --build-arg PLAYWRIGHT_VERSION=v1.58.2 \
-  -t localhost/check_cep:latest .
+podman pull ghcr.io/lausser/check_cep:0.24.0
+python3 check_cep --version        # → check_cep 0.24.0 — use the same version for plugin and image
+```
+
+| Tag | Moves? | Use |
+|---|---|---|
+| `X.Y.Z` (e.g. `0.24.0`) | never | **production** — pin this in `--image` |
+| `X.Y.Z-pwP.Q.R` (e.g. `0.24.0-pw1.60.0`) | never | same image, Playwright version visible in the tag |
+| `X.Y` (e.g. `0.24`) | yes | opt-in: follow patch releases of one minor version |
+| `latest` | yes | trying things out only |
+
+The strictest pin is the digest:
+`--image ghcr.io/lausser/check_cep@sha256:…` (`podman image inspect
+--format '{{.Digest}}'`). Release candidates (`X.Y.Z-rc.N`) get only the two
+immutable tags. The plugin and image versions show up in every run's
+`test-meta.json` (`versions`); `--debug` logs a line when they differ. How
+releases are made: [RELEASING.md](RELEASING.md).
+
+### Build the Container Image
+
+Build locally with `make`; the Playwright version and the pinned base-image
+digest come from `src/container/versions.env`, the release version from
+`VERSION`:
+
+```bash
+make image        # localhost/check_cep:latest, :<VERSION>, :v<Playwright version>
+make test-image   # check_cep:test (used by the test suite)
+```
+
+Every `make image*` target first runs `scripts/check-versions.py`, which
+fails when `versions.env`, `src/container/package.json` and
+`package-lock.json` disagree on the Playwright version, or `VERSION` differs
+from the plugin's `CEP_VERSION`.
+
+Without `make`, pass all five build-args (the Dockerfile has no defaults):
+
+```bash
+. src/container/versions.env
+podman build --target base \
+  --build-arg PLAYWRIGHT_VERSION=$PLAYWRIGHT_VERSION \
+  --build-arg PLAYWRIGHT_BASE_DIGEST=$PLAYWRIGHT_BASE_DIGEST \
+  --build-arg CEP_VERSION=$(cat VERSION) \
+  --build-arg VCS_REF=$(git rev-parse HEAD) \
+  --build-arg BUILD_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ) \
+  -t localhost/check_cep:latest src/container/
 ```
 
 This takes a few minutes on the first run (downloading browsers). Subsequent
-builds are fast thanks to layer caching.
+builds are fast thanks to layer caching. The image carries OCI labels
+(`org.opencontainers.image.version`, `.revision`, `.created`, `.source`,
+`.title`) and `io.consol.check_cep.playwright.version`.
 
 ### Custom npm Dependencies
 
-If your tests need additional npm packages (e.g. `@axe-core/playwright`), replace
-the zero-byte `src/package.json` and `src/package-lock.json` with real ones before
-building. The Dockerfile detects a non-empty `package-lock.json` and runs `npm ci`
-automatically.
+If your tests need additional npm packages (e.g. `@axe-core/playwright`), add
+them to `src/container/package.json` and run `make package-lock` before
+building; the Dockerfile installs from `package-lock.json` with `npm ci`.
+Keep `@playwright/test` pinned to the exact version from `versions.env` —
+the build fails otherwise.
 
 ## 2. Prepare Test Files
 
@@ -449,7 +494,7 @@ check_cep sets these variables itself; `--environ` rejects them with UNKNOWN
 - exact names: `TEST_SOURCE`, `RESULT_DEST`, `LOGGING`, `PWTIMEOUT`,
   `PROBE_LOCATION`, `TESTIDENT`, `TERM`, `FORCE_COLOR`, `CEP_STARTED`,
   `DEBUG`, `HEADED`, `BROWSER`, `REPORT_PATH`, `CEP_SLOW_MO`,
-  `CEP_VISION_HIGHLIGHT_MS`
+  `CEP_VISION_HIGHLIGHT_MS`, `CEP_PLUGIN_VERSION`
 - prefixes: `NAGIOS_`, `TEST_ARTIFACT`, `S3_`, `AWS_`, `LOKI_`
 
 The display variables (`DISPLAY`, `WAYLAND_DISPLAY`, `XDG_RUNTIME_DIR`,

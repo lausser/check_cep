@@ -1,11 +1,33 @@
-ARG PLAYWRIGHT_VERSION=v1.60.0
-FROM mcr.microsoft.com/playwright:${PLAYWRIGHT_VERSION}-noble AS base
+# Build-args without defaults (spec 024): the values come from
+# src/container/versions.env and VERSION — build with `make image` (or pass
+# all five --build-arg values, see README "Build the Container Image").
+# PLAYWRIGHT_VERSION has no "v" prefix; the base image is pinned by digest.
+# A missing PLAYWRIGHT_VERSION/PLAYWRIGHT_BASE_DIGEST already fails while
+# resolving FROM (before any RUN can check it); the other args are checked
+# with a clear message below.
+ARG PLAYWRIGHT_VERSION
+ARG PLAYWRIGHT_BASE_DIGEST
+FROM mcr.microsoft.com/playwright:v${PLAYWRIGHT_VERSION}-noble@${PLAYWRIGHT_BASE_DIGEST} AS base
 
-# Re-declare ARG after FROM
-ARG PLAYWRIGHT_VERSION=v1.60.0
+# Re-declare ARGs after FROM
+ARG PLAYWRIGHT_VERSION
+ARG CEP_VERSION
+ARG VCS_REF
+ARG BUILD_DATE
+RUN for arg in PLAYWRIGHT_VERSION=${PLAYWRIGHT_VERSION} CEP_VERSION=${CEP_VERSION} \
+               VCS_REF=${VCS_REF} BUILD_DATE=${BUILD_DATE}; do \
+        [ -n "${arg#*=}" ] || { echo "missing --build-arg ${arg%%=*} (use make image)"; exit 1; }; \
+    done
 ENV PLAYWRIGHT_VERSION=${PLAYWRIGHT_VERSION} \
+    CEP_IMAGE_VERSION=${CEP_VERSION} \
     DEBIAN_FRONTEND="noninteractive" \
     TZ="UTC"
+LABEL org.opencontainers.image.version="${CEP_VERSION}" \
+      org.opencontainers.image.revision="${VCS_REF}" \
+      org.opencontainers.image.source="https://github.com/lausser/check_cep" \
+      org.opencontainers.image.created="${BUILD_DATE}" \
+      org.opencontainers.image.title="check_cep" \
+      io.consol.check_cep.playwright.version="${PLAYWRIGHT_VERSION}"
 
 # Install Python 3, system dependencies, and configure sudo for pwuser
 # (sudo needed for `npx playwright install` to install browser system deps)
@@ -68,6 +90,10 @@ RUN if [ -s package-lock.json ]; then \
         rm -f package.json package-lock.json && \
         npm init -y && \
         npm install @playwright/test; \
+    fi && \
+    BUNDLED=$(npx playwright --version | awk '{print $2}') && \
+    if [ "$BUNDLED" != "${PLAYWRIGHT_VERSION}" ]; then \
+        echo "Playwright mismatch: base/arg ${PLAYWRIGHT_VERSION} vs bundled ${BUNDLED}"; exit 1; \
     fi
 
 # Install the pinned Lightpanda browser binary to the stable runtime path.

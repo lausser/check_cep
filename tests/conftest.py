@@ -107,6 +107,21 @@ def write_playwright_config():
 # Session fixtures
 # ---------------------------------------------------------------------------
 
+def _image_build_args():
+    """The build-args `make test-image` passes (spec 024): Playwright pin from
+    src/container/versions.env, release version from VERSION, label data."""
+    values = {}
+    for line in (_CONTAINER_DIR / "versions.env").read_text().splitlines():
+        key, sep, value = line.strip().partition("=")
+        if sep and key in ("PLAYWRIGHT_VERSION", "PLAYWRIGHT_BASE_DIGEST"):
+            values[key] = value
+    values["CEP_VERSION"] = (_REPO_ROOT / "VERSION").read_text().strip()
+    values["VCS_REF"] = subprocess.run(["git", "rev-parse", "HEAD"], cwd=_REPO_ROOT,
+                                       capture_output=True, text=True, check=True).stdout.strip()
+    values["BUILD_DATE"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    return [arg for key, value in values.items() for arg in ("--build-arg", f"{key}={value}")]
+
+
 @pytest.fixture(scope="session")
 def cep_image():
     """Return the container image tag to use for all tests.
@@ -130,7 +145,8 @@ def cep_image():
         shutil.copytree(skills_src, skills_dst, symlinks=False)
     try:
         subprocess.run(
-            ["podman", "build", "--target", "base", "-t", image, str(_CONTAINER_DIR)],
+            ["podman", "build", "--target", "base", *_image_build_args(),
+             "-t", image, str(_CONTAINER_DIR)],
             check=True,
         )
     finally:

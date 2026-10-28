@@ -178,7 +178,9 @@ def write_test_meta(results_path: str, hostname: str, servicedescription: str,
     """Write test-meta.json with execution metadata (v2 schema).
 
     `layers` (spec 023 FR-033) records position, host path and type of every
-    layer; never contents or container paths.
+    layer; never contents or container paths. `versions` (spec 024 FR-013)
+    records plugin, image and Playwright version, each "unknown" when the
+    environment does not provide it (e.g. an older plugin or image).
     """
     meta = {
         "started": cep_started if cep_started else str(int(time.time())),
@@ -192,6 +194,11 @@ def write_test_meta(results_path: str, hostname: str, servicedescription: str,
     }
     if layers is not None:
         meta["layers"] = layers
+    meta["versions"] = {
+        "plugin": os.environ.get("CEP_PLUGIN_VERSION") or "unknown",
+        "image": os.environ.get("CEP_IMAGE_VERSION") or "unknown",
+        "playwright": os.environ.get("PLAYWRIGHT_VERSION") or "unknown",
+    }
     meta_path = os.path.join(results_path, "test-meta.json")
     with open(meta_path, "w", encoding="utf-8") as f:
         json.dump(meta, f, ensure_ascii=False, indent=4)
