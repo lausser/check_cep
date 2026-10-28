@@ -9,7 +9,7 @@ From 0.23.0 on, each release has a versioned heading
 
 ---
 
-## 0.24.1 — Unreleased — Playwright v1.64.0
+## 0.24.1 — 2026-10-28 — Playwright v1.64.0
 
 ### Changed
 
