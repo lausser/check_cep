@@ -9,7 +9,7 @@ From 0.23.0 on, each release has a versioned heading
 
 ---
 
-## 0.25.0 — Unreleased — Playwright, OpenCode, and Lightpanda
+## 0.25.0 — 2026-11-26 — Playwright, OpenCode, and Lightpanda
 
 This chapter is the compatibility assessment for the upgrade. It names the
 previous and selected release of each product. `test-meta.json` `versions`
