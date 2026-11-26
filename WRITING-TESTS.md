@@ -1165,10 +1165,11 @@ pure Playwright locators.
 > still incomplete, so it only works for really simple web pages today.
 > If it doesn't work for your test, use Chromium (the default).
 >
-> The container ships Lightpanda **1.0.2** (native binary, pinned in
+> The container ships Lightpanda **1.0.5** (native binary, pinned in
 > `src/container/Dockerfile`). The capability notes below were verified on
-> 0.3.4; on 1.0.2 the integration lane (navigation/DOM queries, failure,
-> timeout and syntax verdicts) passes unchanged.
+> 0.3.4; on 1.0.2 and again on 1.0.5 the integration lane (navigation/DOM
+> queries, failure, timeout and syntax verdicts) passes unchanged.
+> `tc_pass` is still an expected failure on 1.0.5.
 
 ### What Works
 
@@ -1344,7 +1345,7 @@ Send `<TestName>.ai` plus any referenced images to your admin.
 
 ### Part 2 — For the admin (running the session)
 
-**Build the `ai` image once** (adds `opencode-ai`, `playwright-cli`, and the
+**Build the `ai` image once** (adds OpenCode `@opencode/cli` 2.4.1, `playwright-cli`, and the
 authoring skills on top of the base image — see *Makefile Targets* in
 `README.md`):
 

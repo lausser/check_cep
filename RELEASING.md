@@ -115,7 +115,7 @@ A Playwright upgrade is a patch release.
    ```bash
    curl -sSI \
      -H 'Accept: application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json' \
-     https://mcr.microsoft.com/v2/playwright/manifests/v1.64.0-noble | grep -i docker-content-digest
+     https://mcr.microsoft.com/v2/playwright/manifests/v1.65.1-noble | grep -i docker-content-digest
    ```
    (`podman manifest inspect` prints a re-serialized manifest; its sha256 is
    not the digest.)

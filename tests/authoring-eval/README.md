@@ -56,11 +56,21 @@ NODE_PATH="$NM" node "$NM/.bin/playwright" test --config playwright.config.ts
 **The gated eval has been run to completion on the opencode backend
 (spec 022)**: all 12 cases pass — 9/9 positive cases (SC-001, SC-003) and all
 3 adversarial cases (SC-002), each correctly refusing/flagging rather than
-fabricating a passing package. The default free `opencode/big-pickle` model
-is keyless, so this required no paid key — only patience across a couple of
-transient rate-limit windows on the free tier (a quota/rate-limit hit is
-classified `quota_error` and **fails** the run immediately; there is no
-skip/retry — see the gating knobs below).
+fabricating a passing package. That pass was on `opencode-ai` 1.18.4.
+The default free `opencode/big-pickle` model is keyless, so this required
+no paid key — only patience across a couple of transient rate-limit
+windows on the free tier (a quota/rate-limit hit is classified
+`quota_error` and **fails** the run immediately; there is no skip/retry
+— see the gating knobs below).
+
+On `@opencode/cli` 2.4.1 the free `opencode/big-pickle` model finished
+9 passed and 3 failed: `ConsentFirstVisit` and `Iframe` hit the 900s
+harness limit, and `MovingElement` stopped on the free-tier quota.
+The same image with `OPENCODE_MODEL=house/lassi` and
+`CEP_OPENCODE_CONFIG` pointing at an OpenAI-compatible overlay finished
+3 passed and 9 failed in 10696s. Those nine were killed at 900s before
+packaging. Both runs are in the 0.25.0 chapter of `CHANGES.md`. The pin
+is 2.4.1.
 
 ## C. Run the gated behavioural eval (needs AI image + `CEP_AI_EVAL=1`)
 
@@ -96,7 +106,8 @@ export CEP_SLOW_MO=400        # FR-016: slows the verification RUN so it's watch
 | `CEP_AI_EVAL` | unset | **The gate.** `1` ⇒ eval eligible; unset ⇒ all cases skip. |
 | `CEP_AI_IMAGE` | `localhost/check_cep:ai-latest` | AI image; missing ⇒ skip. |
 | `OPENCODE_MODEL` | `opencode/big-pickle` | Pinned model (FR-014); keyless by default. |
-| `OPENCODE_API_KEY` / `GEMINI_API_KEY` | unset | Passed through if set on the host (curated paid Zen model / Gemini connection); never the gate. |
+| `OPENCODE_API_KEY` / `GEMINI_API_KEY` / `OPENAI_API_KEY` | unset | Passed through if set on the host (paid Zen model, Gemini, or an OpenAI-compatible overlay). Never the gate. The value is not put on the podman command line. |
+| `CEP_OPENCODE_CONFIG` | unset | Host path of an `opencode.json` overlay. Mounted at the same container path as `check_cep --opencode-config`, and `OPENCODE_CONFIG` points at it. |
 | `CEP_MAX_ITERATIONS` | `5` | Passed to `cep_authoring -n` (pass bar). |
 | `CEP_SLOW_MO` | unset | With `HEADED=1`, slows the verification RUN (FR-016). |
 

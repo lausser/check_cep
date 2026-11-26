@@ -9,6 +9,96 @@ From 0.23.0 on, each release has a versioned heading
 
 ---
 
+## 0.25.0 — Unreleased — Playwright, OpenCode, and Lightpanda
+
+This chapter is the compatibility assessment for the upgrade. It names the
+previous and selected release of each product. `test-meta.json` `versions`
+stays `plugin`, `image`, and `playwright`.
+
+### Changed
+
+- Playwright `1.64.0` → `1.65.1`. Base image
+  `mcr.microsoft.com/playwright:v1.65.1-noble`, digest-pinned
+  `sha256:1507cbfc550a63a6b7396791ca4f00df17beb56342d2447b3f106c306f525579`.
+  `@playwright/test` is exactly `1.65.1`.
+- Lightpanda `1.0.2` → `1.0.5` (native binary, no `v` prefix). The
+  alternate-browser lane kept the same monitoring statuses. `tc_pass_canary`
+  stayed an expected failure and was not promoted.
+- OpenCode `opencode-ai` `1.18.4` → `@opencode/cli` `2.4.1`.
+  GitHub `anomalyco/opencode` tag `v2.4.1` is a stable release
+  (published 2026-11-23, not a pre-release). npm `opencode-ai` `latest`
+  is still `1.19.6`; that package does not publish 2.x. The authoring
+  image installs `@opencode/cli@2.4.1`. `opencode --version` reports
+  `opencode v2.4.1`. `opencode run` still accepts `-m` and `--agent`.
+  The baked config loads without an edit: the critic agent still denies
+  edit and shell, and `bash` in that config is read as `shell`.
+  No customer script was edited. The authoring eval on this image was
+  9 passed, 3 failed in 3968s. `ConsentFirstVisit` and `Iframe` were
+  killed at the 900s harness limit (`classification=timeout`) before a
+  package was produced. `MovingElement` stopped on `Free usage limit
+  reached` (`classification=quota_error`), which the harness records as
+  a budget limit, not a migration bug. The pin stays `2.4.1`.
+- The official Playwright image moves Node.js from 24 to 26. This product
+  does not pin Node. That move is not a script change. The built image
+  reports Node `v26.13.1`.
+- This chapter proposes product version `0.25.0`. `VERSION` and
+  `CEP_VERSION` stay `0.24.1` until `scripts/release.py prepare 0.25.0`
+  on `main`. The image tag alias `0.25.0-pw1.65.1` is applied when that
+  release is cut.
+
+### Verdicts
+
+Playwright span after `1.64.0`: `1.64.1`, `1.65.0`, `1.65.1`.
+Lightpanda span after `1.0.2`: `1.0.3`, `1.0.4`, `1.0.5`.
+No release-candidate rows. No script in this repository was edited.
+Customer scripts outside the repository were not edited.
+
+| Release | Verdict | What an author sees | Adjustment |
+|---|---|---|---|
+| Playwright 1.64.1 | no script change | Bug fixes only. A Chromium redirect abort with a registered route returns to the 1.64.0 behavior. | None. |
+| Playwright 1.65.0 | script change required | Shipped checks in this repository did not change. A customer script can change when a class field reads a constructor parameter before it is assigned; an action targets an `inert` element (Playwright now waits until it is not inert, then times out); cookie URL matching used the old host or path rules; website login credentials were placed in the browser `proxy` option (they now answer only proxy challenges); an accessible-name or aria-snapshot check reads text the browser does not render; or `APIRequestContext` `params` were expected to replace an existing query. | Assign the constructor parameter before the class field reads it. Do not act on an `inert` element until it is active. Match cookies with the new host and path rules. Put site login in `httpCredentials`. Assert text the browser renders. Pass `params` only as the query you want the request to send. |
+| Playwright 1.65.1 | no script change | Fixes the 1.65.0 class-field load failure when `useDefineForClassFields` is false, and a Bun column offset. | None beyond the 1.65.0 row. |
+| Lightpanda 1.0.3 | script change required | Shipped checks in this repository passed unchanged. A customer script can change when touch handlers are gone, a script inserted with `setContent` or `appendChild` from Playwright's isolated world runs in the main world, or `focus()` and `selectOption()` fire React `onFocus` and `onChange`. | Do not depend on touch handlers. Treat inserted scripts as main-world. Expect those React handlers to run. |
+| Lightpanda 1.0.4 | script change required | Shipped checks in this repository passed unchanged. A customer script can change when a cross-site response sets a `SameSite` cookie other than `None`, or a tool click is expected to hit `(0, 0)` rather than the element's center. | Set cross-site cookies as `SameSite=None`. Do not depend on a click landing on the element's top-left corner. |
+| Lightpanda 1.0.5 | script change required | Shipped checks in this repository passed unchanged. A customer script can change when layout or hit testing changes (`display: grid`, `calc()`, positioned boxes, `inert` subtrees skipped), an incomplete HTTP body is treated as success, `history.pushState` goes to another origin, or a cached response skipped CORS. PandaScript `page.evaluate()` returning a promise is that product's script API, not these Playwright tests. | Do not depend on the old box or hit target. Treat a short body as a failed response. Keep `pushState` on the same origin. Expect CORS on a cached cross-origin response. |
+
+### Verification
+
+- Default runtime, `pytest tests/integration/ -k "not test_local_lightpanda"`
+  on `check_cep:test`: 116 passed, 12 skipped, 0 failed. The twelve skips
+  are the authoring eval, which stays opt-in.
+- Lightpanda lane,
+  `pytest tests/integration/test_modes.py -k test_local_lightpanda`:
+  4 passed, 1 xfailed (`tc_pass_canary`). Same statuses as on 1.0.2.
+  No expected-failure promotion. No environmental exclusion.
+- `versions.playwright` in a run's `test-meta.json` is `1.65.1`. The object
+  has no `lightpanda` or `opencode` key.
+- No project check failed before a compatibility edit, so no suite-evidence
+  row is tied to a script change. The `script change required` rows above
+  are the vendor notes. They stay even though the project checks are green.
+- Full suite `make test-all` on this image: 120 passed, 12 skipped,
+  1 xfailed, 0 failed. Same count as the 0.24.1 baseline. The one
+  xfailed is `tc_pass_canary`.
+- Headed vision checks on a Wayland desktop,
+  `pytest tests/integration/test_modes.py -k "tc_vision and local"`:
+  8 passed, 46 deselected, with `CEP_SPECTATE=1` (137.55s) and again with
+  `CEP_SPECTATE=1 CEP_VNC=1` (162.86s, watched in vncviewer).
+- Authoring eval on `@opencode/cli` 2.4.1 with `OPENCODE_MODEL=house/lassi`
+  and the operator's OpenAI-compatible overlay
+  (`CEP_AI_EVAL=1 CEP_AI_IMAGE=check_cep:test-ai`): 3 passed, 9 failed
+  in 10696s. Passed: `StableVsDynamic`, `ResponsiveBreakpoint`,
+  `unsatisfiable`. The other nine were killed at the 900s harness limit
+  (`exit 124`) before `cep_package`. `MultiPageJourney` had already
+  recorded three green runs. The harness labeled `ConsentFirstVisit`,
+  `incoherent`, and `nondeterministic` as `quota_error`: the first two
+  because a directory listing contained the file size `503`, and
+  `nondeterministic` because one socket reset (`ECONNRESET`) appeared in
+  the log. The endpoint accepted the model. This run does not restore
+  `opencode-ai` 1.18.4. Assisted authoring is the bar for this release.
+  A fully unattended 12/12 eval is not required to publish `0.25.0`.
+
+---
+
 ## 0.24.1 — 2026-10-28 — Playwright v1.64.0
 
 ### Changed

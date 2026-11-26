@@ -42,6 +42,15 @@ OPENCODE_MODEL = os.environ.get("OPENCODE_MODEL", "opencode/big-pickle")  # FR-0
 CEP_MAX_ITERATIONS = os.environ.get("CEP_MAX_ITERATIONS", "5")
 HEADED = bool(os.environ.get("HEADED", ""))
 CEP_SLOW_MO = os.environ.get("CEP_SLOW_MO", "")
+# Host overlay for a custom provider (OpenAI-compatible base URL, and so on).
+# Same container path check_cep uses for --opencode-config. Unset keeps the
+# baked config and the keyless default model.
+CEP_OPENCODE_CONFIG = os.environ.get("CEP_OPENCODE_CONFIG", "")
+OPENCODE_CONFIG_CONTAINER_PATH = "/home/pwuser/.config/opencode/providers.json"
+# Forwarded only when set on the host. Bare `podman --env NAME` keeps the
+# value out of the command line. OPENAI_API_KEY is the placeholder used by
+# an OpenAI-compatible overlay (`{env:OPENAI_API_KEY}`).
+_FORWARDED_ENV = ("OPENCODE_API_KEY", "GEMINI_API_KEY", "OPENAI_API_KEY")
 
 # Credential-shaped strings the sample app uses; must never appear OUTSIDE .env.
 _SECRET_MARKERS = ("Passw0rd!",)
@@ -138,9 +147,16 @@ def _podman_authoring_cmd(ws: Path, testname: str) -> list[str]:
     # credential vars are passed through ONLY when set on the host — the
     # default free Zen model needs neither (contracts §1/§6).
     env_flags = ["--env", f"OPENCODE_MODEL={OPENCODE_MODEL}"]
-    for key in ("OPENCODE_API_KEY", "GEMINI_API_KEY"):
+    for key in _FORWARDED_ENV:
         if os.environ.get(key):
-            env_flags += ["--env", f"{key}={os.environ[key]}"]
+            env_flags += ["--env", key]
+    volumes = [f"{ws}:/home/pwuser/tests:rw,z"]
+    if CEP_OPENCODE_CONFIG:
+        host = Path(CEP_OPENCODE_CONFIG).expanduser().resolve()
+        if not host.is_file():
+            raise FileNotFoundError(f"CEP_OPENCODE_CONFIG is not a file: {host}")
+        volumes.append(f"{host}:{OPENCODE_CONFIG_CONTAINER_PATH}:ro,z")
+        env_flags += ["--env", f"OPENCODE_CONFIG={OPENCODE_CONFIG_CONTAINER_PATH}"]
     if HEADED:
         env_flags += ["--env", "HEADED=1"]
     if CEP_SLOW_MO:
@@ -156,7 +172,7 @@ def _podman_authoring_cmd(ws: Path, testname: str) -> list[str]:
         # is already pwuser and keep-id maps the host UID onto it.
         f"--userns=keep-id:uid={CONTAINER_UID},gid={CONTAINER_GID}",
         "--security-opt", "label=disable",
-        "--volume", f"{ws}:/home/pwuser/tests:rw,z",
+        *[arg for vol in volumes for arg in ("--volume", vol)],
         *env_flags,
         CEP_AI_IMAGE,
         "cep_authoring", "-n", str(CEP_MAX_ITERATIONS),

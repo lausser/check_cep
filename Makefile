@@ -5,7 +5,7 @@ include src/container/versions.env
 CEP_VERSION := $(shell cat VERSION)
 VCS_REF := $(shell git rev-parse HEAD)$(if $(shell git status --porcelain),-dirty)
 BUILD_DATE := $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
-OPENCODE_VERSION ?= 1.18.4
+OPENCODE_VERSION ?= 2.4.1
 
 BUILD_ARGS = \
 	--build-arg PLAYWRIGHT_VERSION=$(PLAYWRIGHT_VERSION) \
@@ -28,7 +28,7 @@ help:
 	@echo "  package-lock                      Regenerate src/container/package-lock.json from package.json"
 	@echo ""
 	@echo "Release $(CEP_VERSION), Playwright $(PLAYWRIGHT_VERSION) (src/container/versions.env; upgrade procedure in RELEASING.md)"
-	@echo "Override opencode CLI version: make image-ai OPENCODE_VERSION=1.18.4"
+	@echo "Override opencode CLI version: make image-ai OPENCODE_VERSION=2.4.1"
 
 check-versions:
 	python3 scripts/check-versions.py

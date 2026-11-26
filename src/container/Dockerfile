@@ -65,7 +65,7 @@ WORKDIR /home/pwuser
 # - We also point LIGHTPANDA_EXECUTABLE_PATH at the final stable install path
 #   before `npm ci` so the package postinstall does not download a moving
 #   nightly binary into ~/.cache and accidentally override the pin.
-ARG LIGHTPANDA_BROWSER_VERSION=1.0.2
+ARG LIGHTPANDA_BROWSER_VERSION=1.0.5
 ENV LIGHTPANDA_DISABLE_TELEMETRY=true \
     LIGHTPANDA_EXECUTABLE_PATH=/usr/local/bin/lightpanda
 
@@ -106,7 +106,8 @@ RUN ARCH=$(uname -m) && \
     chmod 755 /tmp/lightpanda && \
     sudo cp /tmp/lightpanda /usr/local/bin/lightpanda && \
     sudo chmod 755 /usr/local/bin/lightpanda && \
-    echo "--- Lightpanda binary installed to /usr/local/bin/lightpanda ---"
+    echo "--- Lightpanda binary installed to /usr/local/bin/lightpanda ---" && \
+    /usr/local/bin/lightpanda version | grep -F "${LIGHTPANDA_BROWSER_VERSION}"
 
 # 3. Playwright Browser Engines
 RUN npx playwright install --with-deps msedge chrome && \
@@ -143,8 +144,9 @@ CMD ["python3", "./run.py"]
 # ── AI STAGE ───────────────────────────────────────────────────────────────
 FROM base AS ai
 
-# opencode CLI version pin (npm dist-tag, pinned)
-ARG OPENCODE_VERSION=1.18.4
+# OpenCode CLI version pin. 2.x is the @opencode/cli package
+# (GitHub anomalyco/opencode). opencode-ai on npm stays on the 1.x line.
+ARG OPENCODE_VERSION=2.4.1
 
 # chrome-devtools-mcp: live-browser inspection/remote-control tool for the
 # authoring agent (spec 020, research R13). Pinned; authoring image only.
@@ -159,7 +161,7 @@ ARG CHROME_DEVTOOLS_MCP_VERSION=1.5.0
 # and isolated so it runs as pwuser in rootless Podman without an unsandboxed
 # or second browser. Exploration is two-tool (chrome-devtools-mcp discovers,
 # @playwright/cli confirms).
-ARG AI_NODE_PACKAGES="opencode-ai@${OPENCODE_VERSION} @playwright/cli chrome-devtools-mcp@${CHROME_DEVTOOLS_MCP_VERSION}"
+ARG AI_NODE_PACKAGES="@opencode/cli@${OPENCODE_VERSION} @playwright/cli chrome-devtools-mcp@${CHROME_DEVTOOLS_MCP_VERSION}"
 RUN mkdir -p /home/pwuser/.config/opencode && \
     echo "--- Installing AI Addons ---" && \
     npm install $AI_NODE_PACKAGES && \

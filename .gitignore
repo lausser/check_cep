@@ -231,3 +231,12 @@ __marimo__/
 tests/authoring-eval/**/test-results/
 tests/authoring-eval/**/playwright-report/
 tests/authoring-eval/**/node_modules/
+
+# Editor and OS scratch (not project source)
+.DS_Store
+Thumbs.db
+*.swp
+*.tmp
+
+# Local agent tooling, not product source
+.grok/
